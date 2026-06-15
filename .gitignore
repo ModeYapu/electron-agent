@@ -1,5 +1,6 @@
 node_modules/
 dist/
-.dev-loop/
-*.tsbuildinfo
+*.log
+.env
+build/
 .DS_Store

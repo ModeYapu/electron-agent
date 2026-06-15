@@ -65,7 +65,7 @@ export class ConnectionManager extends EventEmitter {
       }
     });
 
-    this.ws.on('error', (err) => {
+    this.ws.on('error', (err: Error) => {
       console.error('WebSocket error:', err);
       this.emit('error', err);
       // NOTE: do not reconnect here. ws always fires a 'close' after 'error',

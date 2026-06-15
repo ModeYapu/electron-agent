@@ -15,11 +15,22 @@
     "clean": "rm -rf node_modules packages/*/node_modules apps/*/node_modules"
   },
   "devDependencies": {
-    "typescript": "^5.9.0",
     "@types/node": "^22.0.0",
-    "tsx": "^4.7.0"
+    "@types/ws": "^8.18.1",
+    "electron": "^42.4.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.9.0"
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "body-parser": "^2.3.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "jsonwebtoken": "^9.0.3",
+    "uuid": "^14.0.0",
+    "ws": "^8.21.0"
   }
 }
