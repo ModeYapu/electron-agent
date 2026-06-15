@@ -1,0 +1,15 @@
+{
+  "name": "@electron-agent/shared",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "verify": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.9.0"
+  }
+}
