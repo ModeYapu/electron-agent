@@ -274,6 +274,26 @@ export const useWebSocketStore = defineStore('websocket', () => {
     await send({ type: 'cmd:subscribeConsole', requestId: generateRequestId(), enable });
   };
 
+  const fillForm = async (fields: Record<string, string | boolean | number>): Promise<any> => {
+    const result = await send({ type: 'cmd:fillForm', requestId: generateRequestId(), fields });
+    if (result.success) {
+      addCommandLog(true, `Batch filled ${Object.keys(fields).length} fields`);
+      return result.data;
+    }
+    addCommandLog(false, `FillForm failed: ${result.error}`);
+    throw new Error(result.error || 'Failed to fill form');
+  };
+
+  const getFields = async (): Promise<any[]> => {
+    const result = await send({ type: 'cmd:getFields', requestId: generateRequestId() });
+    if (result.success) {
+      // Refresh screenshot after scanning to show updated page
+      send({ type: 'cmd:screenshot', requestId: generateRequestId(), quality: 40 }).catch(() => {});
+      return (result.data as any[]) || [];
+    }
+    throw new Error(result.error || 'Failed to get fields');
+  };
+
   // ========== Inbound message handling ==========
 
   const handleMessage = (message: ServerBroadcastMessage) => {

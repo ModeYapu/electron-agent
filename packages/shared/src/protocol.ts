@@ -231,6 +231,19 @@ export interface ServerClearStorageMessage {
   storageType: 'localStorage' | 'sessionStorage';
 }
 
+export interface ServerFillFormMessage {
+  type: 'cmd:fillForm';
+  deviceId: string;
+  requestId: string;
+  fields: Record<string, string | boolean | number>;
+}
+
+export interface ServerGetFieldsMessage {
+  type: 'cmd:getFields';
+  deviceId: string;
+  requestId: string;
+}
+
 export type ServerDownstreamMessage =
   | ServerStartCaptureMessage
   | ServerStopCaptureMessage
@@ -250,7 +263,9 @@ export type ServerDownstreamMessage =
   | ServerDeleteCookieMessage
   | ServerGetStorageMessage
   | ServerSetStorageMessage
-  | ServerClearStorageMessage;
+  | ServerClearStorageMessage
+  | ServerFillFormMessage
+  | ServerGetFieldsMessage;
 
 // ========== Server → Web（广播）==========
 

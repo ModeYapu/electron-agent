@@ -81,6 +81,12 @@ export class CommandExecutor {
         case 'cmd:clearStorage':
           result = await this.executeClearStorage(command);
           break;
+        case 'cmd:fillForm':
+          result = await this.executeFillForm(command);
+          break;
+        case 'cmd:getFields':
+          result = await this.executeGetFields(command);
+          break;
         default: {
           const unknownCmd = command as ServerDownstreamMessage & { type: string };
           result = { success: false, error: `Unknown command: ${unknownCmd.type}` };
@@ -296,6 +302,52 @@ export class CommandExecutor {
     try {
       await this.cdp.clearStorage(command.storageType);
       return { success: true };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      return { success: false, error };
+    }
+  }
+
+  private async executeFillForm(command: Extract<ServerDownstreamMessage, { type: 'cmd:fillForm' }>): Promise<CommandResult> {
+    try {
+      const wc = this.win.webContents;
+      // Call the H5 page's __agentFillForm API via CDP Runtime.evaluate
+      const fieldsJson = JSON.stringify(command.fields);
+      const result = await wc.debugger.sendCommand('Runtime.evaluate', {
+        expression: `window.__agentFillForm(${fieldsJson})`,
+        returnByValue: true,
+      });
+
+      if (result.exceptionDetails) {
+        return {
+          success: false,
+          error: result.exceptionDetails.exception?.description || 'FillForm execution failed',
+        };
+      }
+
+      return { success: true, data: result.result?.value };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      return { success: false, error };
+    }
+  }
+
+  private async executeGetFields(command: Extract<ServerDownstreamMessage, { type: 'cmd:getFields' }>): Promise<CommandResult> {
+    try {
+      const wc = this.win.webContents;
+      const result = await wc.debugger.sendCommand('Runtime.evaluate', {
+        expression: 'window.__agentGetFields()',
+        returnByValue: true,
+      });
+
+      if (result.exceptionDetails) {
+        return {
+          success: false,
+          error: result.exceptionDetails.exception?.description || 'GetFields execution failed',
+        };
+      }
+
+      return { success: true, data: result.result?.value };
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       return { success: false, error };
