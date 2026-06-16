@@ -11,6 +11,24 @@ import { CommandExecutor } from './executor';
 import { StatusReporter } from './reporter';
 import type { DeviceInfo, ServerDownstreamMessage } from '@electron-agent/shared';
 import type { BrowserWindow } from 'electron';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+
+/** Stable device ID — generated once and persisted to disk */
+function loadOrCreateDeviceId(): string {
+  const idFile = path.join(os.homedir(), '.electron-agent-device-id');
+  try {
+    if (fs.existsSync(idFile)) {
+      return fs.readFileSync(idFile, 'utf-8').trim();
+    }
+  } catch {}
+  const id = uuidv4().replace(/-/g, '').slice(0, 16);
+  try {
+    fs.writeFileSync(idFile, id, 'utf-8');
+  } catch {}
+  return id;
+}
 
 export interface AgentConfig {
   serverUrl: string;
@@ -42,7 +60,7 @@ export class ElectronAgent {
 
   constructor(private win: BrowserWindow, config: AgentConfig) {
     this.config = config;
-    this.deviceId = uuidv4();
+    this.deviceId = loadOrCreateDeviceId();
     this.deviceInfo = {
       deviceId: this.deviceId,
       name: config.deviceInfo.name || 'Electron Agent',
