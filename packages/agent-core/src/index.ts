@@ -11,23 +11,28 @@ import { CommandExecutor } from './executor';
 import { StatusReporter } from './reporter';
 import type { DeviceInfo, ServerDownstreamMessage } from '@electron-agent/shared';
 import type { BrowserWindow } from 'electron';
-import * as fs from 'fs';
-import * as path from 'path';
 import * as os from 'os';
+import { createHash } from 'crypto';
 
-/** Stable device ID — generated once and persisted to disk */
-function loadOrCreateDeviceId(): string {
-  const idFile = path.join(os.homedir(), '.electron-agent-device-id');
-  try {
-    if (fs.existsSync(idFile)) {
-      return fs.readFileSync(idFile, 'utf-8').trim();
-    }
-  } catch {}
-  const id = uuidv4().replace(/-/g, '').slice(0, 16);
-  try {
-    fs.writeFileSync(idFile, id, 'utf-8');
-  } catch {}
-  return id;
+/** Hardware fingerprint — stable device ID derived from MAC + CPU + RAM */
+function hardwareFingerprint(): string {
+  // 1. Primary MAC address (most stable hardware identifier)
+  const nets = os.networkInterfaces();
+  let mac = '';
+  for (const name of Object.keys(nets)) {
+    const iface = nets[name]?.find(
+      (a) => !a.internal && a.mac !== '00:00:00:00:00:00'
+    );
+    if (iface) { mac = iface.mac; break; }
+  }
+
+  // 2. CPU model + total RAM
+  const cpu = os.cpus()[0]?.model || '';
+  const ram = os.totalmem().toString();
+
+  // 3. SHA256 hash → 16 hex chars
+  const fingerprint = `${mac}|${cpu}|${ram}`;
+  return createHash('sha256').update(fingerprint).digest('hex').slice(0, 16);
 }
 
 export interface AgentConfig {
@@ -60,7 +65,7 @@ export class ElectronAgent {
 
   constructor(private win: BrowserWindow, config: AgentConfig) {
     this.config = config;
-    this.deviceId = loadOrCreateDeviceId();
+    this.deviceId = hardwareFingerprint();
     this.deviceInfo = {
       deviceId: this.deviceId,
       name: config.deviceInfo.name || 'Electron Agent',
