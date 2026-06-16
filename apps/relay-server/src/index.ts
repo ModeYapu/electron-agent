@@ -36,7 +36,7 @@ function resolveSecret(name: string): string {
     process.exit(1);
   }
 
-  const generated = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
+  const generated = crypto.randomBytes(8).toString('hex');  // 16 chars
   console.warn(`⚠️  [DEV] ${name} not set — generated ephemeral credential:\n      ${generated}\n     Set ${name} in your environment (.env) for stable credentials.`);
   return generated;
 }

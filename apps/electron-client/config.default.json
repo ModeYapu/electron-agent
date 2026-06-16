@@ -1,5 +1,5 @@
 {
   "serverUrl": "ws://localhost:9300/ws",
-  "agentToken": "0bcc4362f1494f50947f7f1b9497ea8abd1351e61bb1420280386a0cc45f2278",
+  "agentToken": "agent-dev-token",
   "h5Url": ""
 }
