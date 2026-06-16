@@ -11,6 +11,12 @@ import fs from 'fs';
 let mainWindow: BrowserWindow | null = null;
 let agent: ElectronAgent | null = null;
 
+// ========== 权限确认 ==========
+const pendingPermissionRequests = new Map<string, {
+  resolve: (allowed: boolean) => void;
+  timeout: NodeJS.Timeout;
+}>();
+
 // ========== 配置持久化 ==========
 interface AgentConfig {
   serverUrl: string;
@@ -103,6 +109,16 @@ function setupIPC() {
   ipcMain.handle('agent:getCurrentURL', () => {
     return mainWindow?.webContents.getURL() ?? '';
   });
+
+  // 权限确认响应（从 preload 发回）
+  ipcMain.on('agent:permissionResponse', (_event, { requestId, allowed }: { requestId: string; allowed: boolean }) => {
+    const pending = pendingPermissionRequests.get(requestId);
+    if (pending) {
+      clearTimeout(pending.timeout);
+      pendingPermissionRequests.delete(requestId);
+      pending.resolve(allowed);
+    }
+  });
 }
 
 // ========== 窗口 ==========
@@ -172,6 +188,29 @@ function initAgent() {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('agent:commandLog', log);
       }
+    },
+    onPermissionRequired: (cmd) => {
+      return new Promise((resolve) => {
+        const requestId = cmd.requestId || `perm_${Date.now()}`;
+        // 10s timeout
+        const timeout = setTimeout(() => {
+          pendingPermissionRequests.delete(requestId);
+          resolve(false);
+        }, 10000);
+        pendingPermissionRequests.set(requestId, { resolve, timeout });
+        // 发送权限请求到 preload → 页面注入弹窗
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('agent:permissionRequest', {
+            requestId,
+            cmdType: cmd.type,
+            cmdDetail: cmd.detail,
+          });
+        } else {
+          clearTimeout(timeout);
+          pendingPermissionRequests.delete(requestId);
+          resolve(false);
+        }
+      });
     },
   });
 

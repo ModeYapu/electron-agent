@@ -100,8 +100,20 @@ export class CommandExecutor {
     }
   }
 
+  private ensureWindowFocused(): void {
+    try {
+      if (!this.win.isFocused()) {
+        this.win.focus();
+      }
+      this.win.webContents.focus();
+    } catch {
+      // Best-effort only; hidden/background windows may reject focus changes.
+    }
+  }
+
   private async executeClick(command: Extract<ServerDownstreamMessage, { type: 'cmd:click' }>): Promise<CommandResult> {
     const wc = this.win.webContents;
+    this.ensureWindowFocused();
 
     // 1. Move mouse to target position (required for proper hit-testing)
     await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
@@ -137,64 +149,99 @@ export class CommandExecutor {
   private async executeType(command: Extract<ServerDownstreamMessage, { type: 'cmd:type' }>): Promise<CommandResult> {
     const wc = this.win.webContents;
     const text = command.text;
+    this.ensureWindowFocused();
 
-    // Use CDP Input.insertText for efficient batch text input
-    // This is ~100x faster than dispatching keyDown/keyUp per character
-    try {
-      await wc.debugger.sendCommand('Input.insertText', { text });
-      return { success: true };
-    } catch {
-      // Fallback: some pages/envs don't support insertText, use per-char dispatch
-      for (const char of text) {
-        const keyCode = char.charCodeAt(0);
+    for (const char of text) {
+      const upper = char.toUpperCase();
+      const isLetter = /^[A-Z]$/.test(upper);
+      const isDigit = /^[0-9]$/.test(char);
+      const code = isLetter ? `Key${upper}` : isDigit ? `Digit${char}` : 'Unidentified';
+      const keyCode = char.charCodeAt(0);
 
-        await wc.debugger.sendCommand('Input.dispatchKeyEvent', {
-          type: 'keyDown',
-          keyCode,
-          key: char,
-          text: char,
-        });
+      await wc.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'rawKeyDown',
+        key: char,
+        code,
+        text: char,
+        unmodifiedText: char,
+        keyCode,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+      });
 
-        await wc.debugger.sendCommand('Input.dispatchKeyEvent', {
-          type: 'keyUp',
-          keyCode,
-          key: char,
-        });
-      }
-      return { success: true };
+      await wc.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'char',
+        key: char,
+        text: char,
+        unmodifiedText: char,
+        keyCode,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+      });
+
+      await wc.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: char,
+        code,
+        keyCode,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+      });
+    }
+
+    return { success: true };
+  }
+
+  private async dispatchSpecialKey(keyCode: number, key: string, code: string, action: 'down' | 'up' | 'press'): Promise<void> {
+    const wc = this.win.webContents;
+
+    if (action === 'down' || action === 'press') {
+      await wc.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'rawKeyDown',
+        key,
+        code,
+        keyCode,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+      });
+    }
+
+    if (action === 'up' || action === 'press') {
+      await wc.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key,
+        code,
+        keyCode,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+      });
     }
   }
 
   private async executeKey(command: Extract<ServerDownstreamMessage, { type: 'cmd:key' }>): Promise<CommandResult> {
-    const wc = this.win.webContents;
-    const keyMap: Record<number, string> = {
-      13: 'Enter',
-      8: 'Backspace',
-      9: 'Tab',
-      27: 'Escape',
-      37: 'ArrowLeft',
-      38: 'ArrowUp',
-      39: 'ArrowRight',
-      40: 'ArrowDown',
+    this.ensureWindowFocused();
+    const keyMap: Record<number, { key: string; code: string }> = {
+      13: { key: 'Enter', code: 'Enter' },
+      8: { key: 'Backspace', code: 'Backspace' },
+      9: { key: 'Tab', code: 'Tab' },
+      27: { key: 'Escape', code: 'Escape' },
+      33: { key: 'PageUp', code: 'PageUp' },
+      34: { key: 'PageDown', code: 'PageDown' },
+      35: { key: 'End', code: 'End' },
+      36: { key: 'Home', code: 'Home' },
+      37: { key: 'ArrowLeft', code: 'ArrowLeft' },
+      38: { key: 'ArrowUp', code: 'ArrowUp' },
+      39: { key: 'ArrowRight', code: 'ArrowRight' },
+      40: { key: 'ArrowDown', code: 'ArrowDown' },
+      46: { key: 'Delete', code: 'Delete' },
     };
 
-    const key = keyMap[command.keyCode] || String.fromCharCode(command.keyCode);
+    const keyInfo = keyMap[command.keyCode] || {
+      key: String.fromCharCode(command.keyCode),
+      code: `Key${String.fromCharCode(command.keyCode).toUpperCase()}`,
+    };
 
-    if (command.action === 'down' || command.action === 'press') {
-      await wc.debugger.sendCommand('Input.dispatchKeyEvent', {
-        type: 'keyDown',
-        keyCode: command.keyCode,
-        key,
-      });
-    }
-
-    if (command.action === 'up' || command.action === 'press') {
-      await wc.debugger.sendCommand('Input.dispatchKeyEvent', {
-        type: 'keyUp',
-        keyCode: command.keyCode,
-        key,
-      });
-    }
+    await this.dispatchSpecialKey(command.keyCode, keyInfo.key, keyInfo.code, command.action);
 
     return { success: true };
   }
@@ -320,10 +367,31 @@ export class CommandExecutor {
   private async executeFillForm(command: Extract<ServerDownstreamMessage, { type: 'cmd:fillForm' }>): Promise<CommandResult> {
     try {
       const wc = this.win.webContents;
-      // Call the H5 page's __agentFillForm API via CDP Runtime.evaluate
       const fieldsJson = JSON.stringify(command.fields);
+      // Self-contained: inject helper + call in one expression
       const result = await wc.debugger.sendCommand('Runtime.evaluate', {
-        expression: `window.__agentFillForm(${fieldsJson})`,
+        expression: `(() => {
+          const fields = ${fieldsJson};
+          const results = [];
+          for (const name of Object.keys(fields)) {
+            const el = document.querySelector('[name="' + name + '"]') || document.getElementById(name);
+            if (!el) { results.push({ok:false, field:name, error:'not found'}); continue; }
+            const val = fields[name];
+            if (el.type === 'radio') {
+              const r = document.querySelector('[name="' + name + '"][value="' + val + '"]');
+              if (r) { r.checked = true; }
+              else { results.push({ok:false, field:name, error:'radio value not found'}); continue; }
+            } else if (el.type === 'checkbox') {
+              el.checked = val === true || val === 'true';
+            } else {
+              el.value = val;
+            }
+            el.dispatchEvent(new Event('input', {bubbles:true}));
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+            results.push({ok:true, field:name, value:val});
+          }
+          return {ok:true, filled:results.length, results};
+        })()`,
         returnByValue: true,
       });
 
@@ -344,8 +412,29 @@ export class CommandExecutor {
   private async executeGetFields(command: Extract<ServerDownstreamMessage, { type: 'cmd:getFields' }>): Promise<CommandResult> {
     try {
       const wc = this.win.webContents;
+      // Self-contained scan — works on any page, not just demo form
       const result = await wc.debugger.sendCommand('Runtime.evaluate', {
-        expression: 'window.__agentGetFields()',
+        expression: `(() => {
+          const fields = [];
+          document.querySelectorAll('input, select, textarea').forEach(el => {
+            if (!el.name && !el.id) return;
+            let value = '';
+            if (el.type === 'radio' || el.type === 'checkbox') {
+              value = el.checked;
+            } else {
+              value = el.value;
+            }
+            fields.push({
+              name: el.name || el.id,
+              id: el.id || '',
+              type: el.type || el.tagName.toLowerCase(),
+              value: value,
+              placeholder: el.placeholder || '',
+              required: !!el.required,
+            });
+          });
+          return fields;
+        })()`,
         returnByValue: true,
       });
 

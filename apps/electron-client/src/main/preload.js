@@ -18,13 +18,9 @@ contextBridge.exposeInMainWorld('electronAgent', {
   },
 
   // ===== 配置管理 =====
-  // 读取配置
   getConfig: () => ipcRenderer.invoke('agent:getConfig'),
-  // 保存配置（部分更新）
   saveConfig: (cfg) => ipcRenderer.invoke('agent:saveConfig', cfg),
-  // 用新配置重连
   reconnect: () => ipcRenderer.invoke('agent:reconnect'),
-  // 监听配置更新
   onConfigUpdated: (callback) => {
     const handler = (_event, cfg) => callback(cfg);
     ipcRenderer.on('agent:configUpdated', handler);
@@ -37,4 +33,121 @@ contextBridge.exposeInMainWorld('electronAgent', {
     ipcRenderer.on('agent:commandLog', handler);
     return () => ipcRenderer.removeListener('agent:commandLog', handler);
   },
+
+  // ===== 权限弹窗 =====
+  // 主进程调用此方法响应权限请求
+  respondPermission: (requestId, allowed) => {
+    ipcRenderer.send('agent:permissionResponse', { requestId, allowed });
+  },
+});
+
+// ===== 权限弹窗注入（不修改 H5 源码） =====
+const PERMISSION_TIMEOUT = 10000; // 10秒后自动拒绝
+
+function injectPermissionStyles() {
+  if (document.getElementById('__ea_perm_styles')) return;
+  const style = document.createElement('style');
+  style.id = '__ea_perm_styles';
+  style.textContent = `
+    #__ea_perm_overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.45); z-index: 2147483647;
+      display: flex; align-items: center; justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+      animation: __ea_fadein 0.2s ease;
+    }
+    @keyframes __ea_fadein { from { opacity: 0; } to { opacity: 1; } }
+    #__ea_perm_card {
+      background: #fff; border-radius: 12px; padding: 28px 32px;
+      max-width: 400px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+      text-align: center;
+    }
+    #__ea_perm_icon { font-size: 40px; margin-bottom: 12px; }
+    #__ea_perm_title { font-size: 18px; font-weight: 600; color: #1a1a1a; margin-bottom: 6px; }
+    #__ea_perm_body { font-size: 14px; color: #666; margin-bottom: 6px; }
+    #__ea_perm_cmd { 
+      font-size: 12px; font-family: monospace; color: #999;
+      background: #f5f5f5; padding: 6px 12px; border-radius: 6px;
+      display: inline-block; margin-bottom: 20px;
+    }
+    #__ea_perm_countdown { font-size: 12px; color: #bbb; margin-bottom: 16px; }
+    #__ea_perm_btns { display: flex; gap: 12px; justify-content: center; }
+    .__ea_btn {
+      padding: 10px 28px; border-radius: 8px; font-size: 14px; font-weight: 500;
+      border: none; cursor: pointer; transition: all 0.15s;
+    }
+    .__ea_btn_deny { background: #f5f5f5; color: #666; }
+    .__ea_btn_deny:hover { background: #e8e8e8; }
+    .__ea_btn_allow { background: #1890ff; color: #fff; }
+    .__ea_btn_allow:hover { background: #40a9ff; }
+  `;
+  document.head.appendChild(style);
+}
+
+function showPermissionPrompt(requestId, cmdType, cmdDetail) {
+  injectPermissionStyles();
+
+  // Remove existing overlay if any
+  const old = document.getElementById('__ea_perm_overlay');
+  if (old) old.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = '__ea_perm_overlay';
+
+  let countdown = Math.floor(PERMISSION_TIMEOUT / 1000);
+  let timer;
+
+  const updateCountdown = () => {
+    const el = document.getElementById('__ea_perm_countdown');
+    if (el) el.textContent = countdown + ' 秒后自动拒绝';
+  };
+
+  overlay.innerHTML = `
+    <div id="__ea_perm_card">
+      <div id="__ea_perm_icon">🔒</div>
+      <div id="__ea_perm_title">远程操作请求</div>
+      <div id="__ea_perm_body">管理端正在请求执行操作：</div>
+      <div id="__ea_perm_cmd">${escapeHtml(cmdType)}${escapeHtml(cmdDetail)}</div>
+      <div id="__ea_perm_countdown">${countdown} 秒后自动拒绝</div>
+      <div id="__ea_perm_btns">
+        <button class="__ea_btn __ea_btn_deny" id="__ea_perm_deny">拒绝</button>
+        <button class="__ea_btn __ea_btn_allow" id="__ea_perm_allow">同意</button>
+      </div>
+    </div>
+  `;
+
+  const respond = (allowed) => {
+    clearInterval(timer);
+    overlay.remove();
+    ipcRenderer.send('agent:permissionResponse', { requestId, allowed });
+  };
+
+  overlay.querySelector('#__ea_perm_allow').onclick = () => respond(true);
+  overlay.querySelector('#__ea_perm_deny').onclick = () => respond(false);
+
+  // Click outside card = ignore (doesn't close, user must choose)
+  overlay.onclick = (e) => { if (e.target === overlay) e.stopPropagation(); };
+
+  document.body.appendChild(overlay);
+
+  // Countdown timer
+  timer = setInterval(() => {
+    countdown--;
+    updateCountdown();
+    if (countdown <= 0) respond(false);
+  }, 1000);
+
+  // Auto-deny after timeout
+  setTimeout(() => {
+    if (document.getElementById('__ea_perm_overlay')) respond(false);
+  }, PERMISSION_TIMEOUT);
+}
+
+function escapeHtml(str) {
+  return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Listen for permission requests from main process
+ipcRenderer.on('agent:permissionRequest', (_event, { requestId, cmdType, cmdDetail }) => {
+  showPermissionPrompt(requestId, cmdType, cmdDetail);
 });

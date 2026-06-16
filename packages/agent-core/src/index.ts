@@ -24,6 +24,8 @@ export interface AgentConfig {
   heartbeatInterval: number;
   captureQuality: number;
   onCommandLog?: (log: { ts: string; type: string; requestId: string; detail: string }) => void;
+  /** Ask user permission before executing remote commands. Returns true if allowed. */
+  onPermissionRequired?: (cmd: { type: string; detail: string; requestId: string }) => Promise<boolean>;
 }
 
 const COMMAND_LOG_PREFIX = '[AGENT]';
@@ -129,6 +131,28 @@ export class ElectronAgent {
     }
   }
 
+  /** Commands that modify page state or input data — require user permission */
+  private needsPermission(type: string): boolean {
+    const restricted = ['cmd:click', 'cmd:type', 'cmd:key', 'cmd:navigate',
+      'cmd:eval', 'cmd:scroll', 'cmd:setCookie', 'cmd:deleteCookie',
+      'cmd:setStorage', 'cmd:clearStorage', 'cmd:fillForm'];
+    return restricted.includes(type);
+  }
+
+  private async askPermission(command: ServerDownstreamMessage): Promise<boolean> {
+    if (!this.config.onPermissionRequired) return true; // No callback = allow all
+    try {
+      const detail = this.commandDetail(command);
+      return await this.config.onPermissionRequired({
+        type: command.type,
+        detail,
+        requestId: command.requestId,
+      });
+    } catch {
+      return false; // Timeout or error = deny
+    }
+  }
+
   private setupEventHandlers(): void {
     this.connection.on('connected', () => {
       this.registerDevice();
@@ -171,6 +195,15 @@ export class ElectronAgent {
   }
 
   private async handleCommand(command: ServerDownstreamMessage): Promise<void> {
+    // Check permission for destructive/input commands
+    if (this.needsPermission(command.type)) {
+      const allowed = await this.askPermission(command);
+      if (!allowed) {
+        this.statusReporter.reportCommandResult(command.requestId, false, undefined, 'User denied permission');
+        return;
+      }
+    }
+
     switch (command.type) {
       case 'cmd:startCapture':
         this.captureService.startCaptureLoop(command.fps, (screenshot) => {

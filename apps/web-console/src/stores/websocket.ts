@@ -484,6 +484,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
     clearStorage,
     subscribeNetwork,
     subscribeConsole,
+    fillForm,
+    getFields,
     // misc
     selectDevice,
     clearLogs,

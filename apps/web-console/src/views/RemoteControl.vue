@@ -1,185 +1,222 @@
 <template>
-  <div class="remote-control">
-    <el-row :gutter="24">
-      <el-col :span="16">
-        <el-card>
-          <template #header>
-            <div class="card-header">
-              <h2>远程控制</h2>
-              <div class="controls">
-                <el-button
-                  @click="toggleStreaming"
-                  :type="streaming ? 'danger' : 'success'"
-                  size="small"
-                >
-                  {{ streaming ? '⏹ 停止直播' : '▶ 开始直播' }}
-                </el-button>
-                <el-button @click="refreshScreenshot" type="primary" size="small">
-                  刷新截图
-                </el-button>
-                <el-button @click="openDOMInspector" type="default" size="small">
-                  DOM 检查器
-                </el-button>
-              </div>
-            </div>
-          </template>
+  <div ref="workspaceRef" class="remote-control">
+    <el-card class="remote-shell" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <div class="title-block">
+            <h2>远程控制</h2>
+            <span class="title-hint">浏览远程画面优先，表单和操作在附近浮层里完成</span>
+          </div>
+          <div class="controls">
+            <el-button
+              @click="toggleStreaming"
+              :type="streaming ? 'danger' : 'success'"
+              size="small"
+            >
+              {{ streaming ? '⏹ 停止直播' : '▶ 开始直播' }}
+            </el-button>
+            <el-button @click="refreshScreenshot" type="primary" size="small">刷新截图</el-button>
+            <el-button @click="utilityDrawerVisible = true" size="small">操作面板</el-button>
+            <el-button @click="logDrawerVisible = true" size="small">日志</el-button>
+            <el-button @click="openDOMInspector" size="small">DOM 检查器</el-button>
+            <el-button @click="toggleFullscreen" size="small">{{ isFullscreen ? '退出全屏' : '全屏浏览' }}</el-button>
+          </div>
+        </div>
+      </template>
 
-          <div class="control-panel">
-            <div class="screenshot-area" v-if="device">
-                <img
-                  v-if="screenshot"
-                  :src="'data:image/jpeg;base64,' + screenshot"
-                  alt="Screenshot"
-                  class="screenshot-image"
-                  @click="handleImageClick"
-                  @wheel.prevent="handleScroll"
-                />
-              <el-empty v-else description="无截图数据 — 点击「刷新截图」或「开始直播」" />
+      <div
+        v-if="device"
+        ref="remoteViewportRef"
+        class="screenshot-area"
+        :class="{ 'keyboard-active': remoteKeyboardActive, fullscreen: isFullscreen }"
+        tabindex="0"
+        @pointerdown="activateRemoteKeyboard"
+        @click="focusRemoteViewport"
+        @focus="remoteKeyboardActive = true"
+        @blur="remoteKeyboardActive = false"
+        @keydown="handleRemoteKeydown"
+      >
+        <div class="viewport-toolbar">
+          <el-tag size="small" effect="dark" type="info">
+            {{ remoteKeyboardActive ? '键盘已接管' : '点击画面后接管键盘' }}
+          </el-tag>
+          <el-tag size="small" effect="dark" :type="streaming ? 'success' : 'warning'">
+            {{ streaming ? '直播中' : '静态截图' }}
+          </el-tag>
+          <el-tag v-if="fieldList.length > 0" size="small" effect="dark" type="primary">
+            已扫描 {{ fieldList.length }} 个字段
+          </el-tag>
+        </div>
+
+        <img
+          v-if="screenshot"
+          :src="'data:image/jpeg;base64,' + screenshot"
+          alt="Screenshot"
+          class="screenshot-image"
+          @click="handleImageClick"
+          @wheel.prevent="handleScroll"
+        />
+        <el-empty v-else description="无截图数据 — 点击「刷新截图」或「开始直播」" />
+
+        <div class="viewport-hint">
+          点击输入框会在附近弹出填写卡片，点击下拉会在附近弹出选项卡片
+        </div>
+
+        <div
+          v-if="inputBubble.visible"
+          class="interaction-bubble input-bubble"
+          :style="bubbleStyle(inputBubble.x, inputBubble.y)"
+          @click.stop
+        >
+          <div class="bubble-header">
+            <span>⌨ {{ inputBubble.label || '输入字段' }}</span>
+            <el-button link size="small" @click="closeInputBubble">收起</el-button>
+          </div>
+          <el-input
+            v-model="inputBubble.text"
+            size="small"
+            placeholder="直接输入要填入的值"
+            @keyup.enter="submitInputBubble"
+          />
+          <div class="bubble-actions">
+            <el-button size="small" @click="closeInputBubble">取消</el-button>
+            <el-button type="primary" size="small" @click="submitInputBubble">填写</el-button>
+          </div>
+        </div>
+
+        <div
+          v-if="showSelectPicker"
+          class="interaction-bubble select-bubble"
+          :style="bubbleStyle(selectBubbleX, selectBubbleY)"
+          @click.stop
+        >
+          <div class="bubble-header">
+            <span>🔽 {{ selectBubbleLabel || '选择下拉选项' }}</span>
+            <el-button link size="small" @click="showSelectPicker = false">收起</el-button>
+          </div>
+          <div class="select-picker-body">
+            <el-radio-group v-model="selectedValue" class="select-radio-group">
+              <el-radio
+                v-for="opt in selectOptions"
+                :key="opt.value"
+                :value="opt.value"
+                class="select-radio-item"
+              >{{ opt.text }} ({{ opt.value }})</el-radio>
+            </el-radio-group>
+          </div>
+          <div class="bubble-actions">
+            <el-button @click="showSelectPicker = false" size="small">取消</el-button>
+            <el-button @click="applySelectValue" type="primary" size="small">确认选择</el-button>
+          </div>
+        </div>
+      </div>
+    </el-card>
+
+    <el-drawer v-model="utilityDrawerVisible" title="操作面板" size="420px">
+      <el-tabs v-model="activeTab" stretch>
+        <el-tab-pane label="快捷操作" name="actions">
+          <el-form :model="controlForm" label-width="72px" size="small">
+            <el-form-item label="URL">
+              <el-input v-model="controlForm.url" placeholder="输入 URL" @keyup.enter="navigate">
+                <template #append>
+                  <el-button @click="navigate" type="primary">跳转</el-button>
+                </template>
+              </el-input>
+            </el-form-item>
+            <el-form-item label="JS">
+              <el-input v-model="controlForm.code" type="textarea" :rows="4" placeholder="JavaScript code" />
+              <el-button @click="evalCode" type="primary" style="margin-top: 8px">执行</el-button>
+            </el-form-item>
+            <el-form-item label="文本">
+              <el-input v-model="controlForm.text" placeholder="发送到当前焦点" @keyup.enter="typeText">
+                <template #append>
+                  <el-button @click="typeText" type="primary">发送</el-button>
+                </template>
+              </el-input>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+
+        <el-tab-pane label="表单字段" name="form">
+          <div class="form-fill-panel">
+            <div class="form-toolbar">
+              <el-button @click="scanFields" type="primary" size="small" :loading="scanning">扫描字段</el-button>
+              <el-button @click="fillAllFields" type="success" size="small" :disabled="fieldList.length === 0">一键填表</el-button>
+              <el-button @click="clearFieldValues" size="small">清空</el-button>
             </div>
 
-            <div class="action-bar">
-              <!-- Select picker overlay -->
-              <div v-if="showSelectPicker" class="select-picker-overlay">
-                <div class="select-picker-card">
-                  <div class="select-picker-header">
-                    <span>🔽 选择下拉选项</span>
-                    <el-button @click="showSelectPicker = false" size="small" circle>✕</el-button>
-                  </div>
-                  <div class="select-picker-body">
-                    <el-radio-group v-model="selectedValue" class="select-radio-group">
-                      <el-radio
-                        v-for="opt in selectOptions"
-                        :key="opt.value"
-                        :value="opt.value"
-                        class="select-radio-item"
-                      >{{ opt.text }} ({{ opt.value }})</el-radio>
-                    </el-radio-group>
-                  </div>
-                  <div class="select-picker-footer">
-                    <el-button @click="showSelectPicker = false" size="small">取消</el-button>
-                    <el-button @click="applySelectValue" type="primary" size="small">确认选择</el-button>
-                  </div>
+            <div class="field-list" v-if="fieldList.length > 0">
+              <div class="field-item" v-for="field in fieldList" :key="field.id || field.name">
+                <label>
+                  <span class="field-name">{{ field.name || field.id }}</span>
+                  <span class="field-type">{{ field.type }}</span>
+                  <span class="field-placeholder" v-if="field.placeholder">{{ field.placeholder }}</span>
+                </label>
+                <div class="field-input-row">
+                  <el-input
+                    v-model="fieldValues[field.name || field.id]"
+                    size="small"
+                    :placeholder="field.placeholder || '输入值'"
+                    v-if="field.type !== 'select-one' && field.type !== 'radio' && field.type !== 'checkbox'"
+                  />
+                  <el-select
+                    v-model="fieldValues[field.name || field.id]"
+                    size="small"
+                    v-else-if="field.type === 'select-one'"
+                    placeholder="选择"
+                  >
+                    <el-option label="(不修改)" value="" />
+                  </el-select>
+                  <el-switch
+                    v-model="fieldValues[field.name || field.id]"
+                    v-else-if="field.type === 'checkbox'"
+                    size="small"
+                  />
+                  <el-input
+                    v-model="fieldValues[field.name || field.id]"
+                    size="small"
+                    placeholder="输入值"
+                    v-else
+                  />
+                  <el-button
+                    @click="fillSingleField(field)"
+                    size="small"
+                    type="primary"
+                    circle
+                    :icon="Check"
+                    style="margin-left: 6px"
+                  />
                 </div>
               </div>
-
-              <el-tabs v-model="activeTab" type="border-card" size="small">
-                <!-- Tab 1: Quick actions -->
-                <el-tab-pane label="快捷操作" name="actions">
-                  <el-form :model="controlForm" label-width="80px" size="small">
-                    <el-form-item label="URL 导航">
-                      <el-input v-model="controlForm.url" placeholder="输入 URL" @keyup.enter="navigate">
-                        <template #append>
-                          <el-button @click="navigate" type="primary">跳转</el-button>
-                        </template>
-                      </el-input>
-                    </el-form-item>
-                    <el-form-item label="JS 执行">
-                      <el-input v-model="controlForm.code" type="textarea" :rows="3" placeholder="JavaScript code" />
-                      <el-button @click="evalCode" type="primary" style="margin-top: 8px">执行</el-button>
-                    </el-form-item>
-                    <el-form-item label="文本输入">
-                      <el-input v-model="controlForm.text" placeholder="输入要发送的文本" @keyup.enter="typeText">
-                        <template #append>
-                          <el-button @click="typeText" type="primary">发送</el-button>
-                        </template>
-                      </el-input>
-                    </el-form-item>
-                  </el-form>
-                </el-tab-pane>
-
-                <!-- Tab 2: Form filling -->
-                <el-tab-pane label="表单填写" name="form">
-                  <div class="form-fill-panel">
-                    <div class="form-toolbar">
-                      <el-button @click="scanFields" type="primary" size="small" :loading="scanning">
-                        扫描表单字段
-                      </el-button>
-                      <el-button @click="fillAllFields" type="success" size="small" :disabled="fieldList.length === 0">
-                        一键填表
-                      </el-button>
-                      <el-button @click="clearFieldValues" size="small">清空</el-button>
-                    </div>
-
-                    <div class="field-list" v-if="fieldList.length > 0">
-                      <div class="field-item" v-for="field in fieldList" :key="field.id || field.name">
-                        <label>
-                          <span class="field-name">{{ field.name || field.id }}</span>
-                          <span class="field-type">{{ field.type }}</span>
-                          <span class="field-placeholder" v-if="field.placeholder">{{ field.placeholder }}</span>
-                        </label>
-                        <div class="field-input-row">
-                          <el-input
-                            v-model="fieldValues[field.name || field.id]"
-                            size="small"
-                            :placeholder="field.placeholder || '输入值'"
-                            v-if="field.type !== 'select-one' && field.type !== 'radio' && field.type !== 'checkbox'"
-                          />
-                          <el-select
-                            v-model="fieldValues[field.name || field.id]"
-                            size="small"
-                            v-else-if="field.type === 'select-one'"
-                            placeholder="选择"
-                          >
-                            <el-option label="(不修改)" value="" />
-                          </el-select>
-                          <el-switch
-                            v-model="fieldValues[field.name || field.id]"
-                            v-else-if="field.type === 'checkbox'"
-                            size="small"
-                          />
-                          <el-input
-                            v-model="fieldValues[field.name || field.id]"
-                            size="small"
-                            placeholder="输入值"
-                            v-else
-                          />
-                          <el-button
-                            @click="fillSingleField(field)"
-                            size="small"
-                            type="primary"
-                            circle
-                            :icon="Check"
-                            style="margin-left: 6px"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                    <el-empty v-else description="点击「扫描表单字段」获取表单结构" :image-size="60" />
-                  </div>
-                </el-tab-pane>
-              </el-tabs>
             </div>
+            <el-empty v-else description="点击「扫描字段」获取表单结构" :image-size="60" />
           </div>
-        </el-card>
-      </el-col>
+        </el-tab-pane>
+      </el-tabs>
+    </el-drawer>
 
-      <el-col :span="8">
-        <el-card>
-          <template #header>
-            <h2>执行日志</h2>
-          </template>
-          <div class="log-panel">
-            <div class="log-entry" v-for="(log, index) in logs" :key="index">
-              <el-tag :type="log.success ? 'success' : 'danger'" size="small">
-                {{ log.success ? '成功' : '失败' }}
-              </el-tag>
-              <span class="log-message">{{ log.message }}</span>
-              <span class="log-time">{{ new Date(log.timestamp).toLocaleTimeString() }}</span>
-            </div>
-            <el-empty v-if="logs.length === 0" description="暂无日志" />
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+    <el-drawer v-model="logDrawerVisible" title="执行日志" size="360px">
+      <div class="log-panel">
+        <div class="log-entry" v-for="(log, index) in logs" :key="index">
+          <el-tag :type="log.success ? 'success' : 'danger'" size="small">
+            {{ log.success ? '成功' : '失败' }}
+          </el-tag>
+          <span class="log-message">{{ log.message }}</span>
+          <span class="log-time">{{ new Date(log.timestamp).toLocaleTimeString() }}</span>
+        </div>
+        <el-empty v-if="logs.length === 0" description="暂无日志" />
+      </div>
+    </el-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick, reactive } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useWebSocketStore } from '@/stores/websocket';
 import { ElMessage } from 'element-plus';
 import { Check } from '@element-plus/icons-vue';
+import { mapKeyboardEventToRemoteAction, type RemoteKeyboardAction } from '@/utils/remoteKeyboard';
 
 const route = useRoute();
 const router = useRouter();
@@ -194,6 +231,22 @@ let streamInterval: ReturnType<typeof setInterval> | null = null;
 
 const controlForm = ref({ url: '', code: '', text: '' });
 const logs = ref<Array<{ success: boolean; message: string; timestamp: number }>>([]);
+const workspaceRef = ref<HTMLElement | null>(null);
+const remoteViewportRef = ref<HTMLElement | null>(null);
+const remoteKeyboardActive = ref(false);
+const utilityDrawerVisible = ref(false);
+const logDrawerVisible = ref(false);
+const isFullscreen = ref(false);
+let remoteKeyQueue: Promise<void> = Promise.resolve();
+let pendingScreenshotRefresh: ReturnType<typeof setTimeout> | null = null;
+
+const inputBubble = reactive({
+  visible: false,
+  text: '',
+  x: 24,
+  y: 24,
+  label: '',
+});
 
 // Form filling state
 const fieldList = ref<any[]>([]);
@@ -206,10 +259,16 @@ onMounted(() => {
     const targetDevice = wsStore.devices.find(d => d.info.deviceId === deviceId);
     if (targetDevice) wsStore.selectDevice(targetDevice);
   }
+
+  window.addEventListener('keydown', handleWindowKeydown, true);
+  document.addEventListener('fullscreenchange', syncFullscreenState);
 });
 
 onUnmounted(() => {
   if (streamInterval) stopStreaming();
+  if (pendingScreenshotRefresh) clearTimeout(pendingScreenshotRefresh);
+  window.removeEventListener('keydown', handleWindowKeydown, true);
+  document.removeEventListener('fullscreenchange', syncFullscreenState);
 });
 
 // ===== Streaming =====
@@ -261,21 +320,113 @@ const stopStreaming = () => {
 
 // ===== Screenshot =====
 const handleImageClick = async (event: MouseEvent) => {
+  focusRemoteViewport();
   const target = event.target as HTMLImageElement;
   const rect = target.getBoundingClientRect();
+  const localX = event.clientX - rect.left;
+  const localY = event.clientY - rect.top;
   const vpW = wsStore.viewportWidth || target.naturalWidth;
   const vpH = wsStore.viewportHeight || target.naturalHeight;
   if (!vpW || !vpH) return;
   const scaleX = vpW / rect.width;
   const scaleY = vpH / rect.height;
-  const x = Math.round((event.clientX - rect.left) * scaleX);
-  const y = Math.round((event.clientY - rect.top) * scaleY);
+  const x = Math.round(localX * scaleX);
+  const y = Math.round(localY * scaleY);
+
+  const info = await inspectElementAt(x, y);
+  if (info?.tag === 'SELECT' && info.options?.length > 0) {
+    openSelectPicker(info, x, y, localX, localY);
+    return;
+  }
 
   // Click first, then detect what was clicked
   await clickAt(x, y);
+  scheduleScreenshotRefresh();
 
-  // Detect element type at clicked position
-  await detectAndHandleElement(x, y);
+  if (info) {
+    await handleInspectedElement(info, x, y, localX, localY);
+    return;
+  }
+
+  await detectAndHandleElement(x, y, localX, localY);
+};
+
+const focusRemoteViewport = () => {
+  nextTick(() => remoteViewportRef.value?.focus());
+};
+
+const activateRemoteKeyboard = () => {
+  remoteKeyboardActive.value = true;
+  focusRemoteViewport();
+};
+
+const syncFullscreenState = () => {
+  isFullscreen.value = document.fullscreenElement === workspaceRef.value;
+};
+
+const toggleFullscreen = async () => {
+  if (!workspaceRef.value) return;
+  try {
+    if (document.fullscreenElement === workspaceRef.value) {
+      await document.exitFullscreen();
+    } else {
+      await workspaceRef.value.requestFullscreen();
+    }
+    syncFullscreenState();
+  } catch (err) {
+    addLog(false, `全屏切换失败: ${err}`);
+  }
+};
+
+const queueRemoteKeyAction = (action: RemoteKeyboardAction) => {
+  if (!device.value) return;
+
+  remoteKeyQueue = remoteKeyQueue
+    .catch(() => {})
+    .then(async () => {
+      if (action.kind === 'type') {
+        addLog(true, `键盘转发: ${JSON.stringify(action.text)}`);
+        await wsStore.send({
+          type: 'cmd:type',
+          requestId: generateRequestId(),
+          text: action.text,
+        });
+        return;
+      }
+
+      addLog(true, `键盘转发: keyCode=${action.keyCode}`);
+      await wsStore.send({
+        type: 'cmd:key',
+        requestId: generateRequestId(),
+        keyCode: action.keyCode,
+        action: action.action,
+      });
+    })
+    .catch((err) => {
+      addLog(false, `键盘输入失败: ${err}`);
+    })
+    .finally(() => {
+      scheduleScreenshotRefresh();
+    });
+};
+
+const handleRemoteKeydown = (event: KeyboardEvent) => {
+  if (!remoteKeyboardActive.value) return;
+  const action = mapKeyboardEventToRemoteAction(event);
+  if (!action) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  queueRemoteKeyAction(action);
+};
+
+const handleWindowKeydown = (event: KeyboardEvent) => {
+  if (!remoteKeyboardActive.value) return;
+
+  const target = event.target as HTMLElement | null;
+  if (target && target.closest('.el-drawer, .interaction-bubble, input, textarea, .el-input, .el-textarea')) return;
+
+  handleRemoteKeydown(event);
 };
 
 const handleScroll = (event: WheelEvent) => {
@@ -307,10 +458,22 @@ const flushScrollLog = () => {
   }, 500);
 };
 
+const scheduleScreenshotRefresh = () => {
+  if (streaming.value) return;
+  if (pendingScreenshotRefresh) clearTimeout(pendingScreenshotRefresh);
+  pendingScreenshotRefresh = setTimeout(() => {
+    pendingScreenshotRefresh = null;
+    refreshScreenshot().catch(() => {});
+  }, 180);
+};
+
 // Detect element type at coordinates and handle specially for selects
 const selectOptions = ref<Array<{text: string; value: string; selected: boolean}>>([]);
 const selectedValue = ref('');
 const showSelectPicker = ref(false);
+const selectBubbleX = ref(24);
+const selectBubbleY = ref(24);
+const selectBubbleLabel = ref('');
 const selectTargetX = ref(0);
 const selectTargetY = ref(0);
 const selectTargetSelector = ref(''); // CSS selector for precise re-targeting
@@ -319,7 +482,7 @@ const selectTargetSelector = ref(''); // CSS selector for precise re-targeting
 let lastClickX = 0;
 let lastClickY = 0;
 
-const detectAndHandleElement = async (x: number, y: number) => {
+const inspectElementAt = async (x: number, y: number) => {
   if (!device.value) return;
   lastClickX = x;
   lastClickY = y;
@@ -353,26 +516,81 @@ const detectAndHandleElement = async (x: number, y: number) => {
       })()`,
     });
     if (result.success && result.data) {
-      const info = result.data as any;
-      if (info.tag === 'SELECT' && info.options?.length > 0) {
-        selectOptions.value = info.options;
-        selectedValue.value = info.options.find((o: any) => o.selected)?.value || '';
-        selectTargetX.value = x;
-        selectTargetY.value = y;
-        // Build a durable selector from the element's name or id
-        selectTargetSelector.value = info.name
-          ? `[name="${info.name}"]`
-          : info.id
-            ? `#${info.id}`
-            : `select:nth-of-type(${info.index || 1})`;
-        showSelectPicker.value = true;
-        addLog(true, `检测到下拉框: ${info.name || info.id || info.tag} (${info.options.length} 个选项)`);
-      } else if (info.tag === 'INPUT' || info.tag === 'TEXTAREA') {
-        addLog(true, `已聚焦: ${info.tag} ${info.name || info.id || ''}`);
-      }
+      return result.data as any;
     }
   } catch (err: any) {
     // Silent — detection is best-effort
+  }
+  return null;
+};
+
+const bubbleStyle = (x: number, y: number) => ({
+  left: `${x}px`,
+  top: `${y}px`,
+});
+
+const positionBubble = (localX: number, localY: number) => {
+  const width = remoteViewportRef.value?.clientWidth ?? 0;
+  const height = remoteViewportRef.value?.clientHeight ?? 0;
+  const bubbleWidth = 320;
+  const bubbleHeight = 220;
+  return {
+    x: Math.max(16, Math.min(localX + 18, Math.max(16, width - bubbleWidth - 16))),
+    y: Math.max(16, Math.min(localY + 18, Math.max(16, height - bubbleHeight - 16))),
+  };
+};
+
+const closeInputBubble = () => {
+  inputBubble.visible = false;
+  inputBubble.text = '';
+  inputBubble.label = '';
+};
+
+const openInputBubble = (info: any, localX: number, localY: number) => {
+  const pos = positionBubble(localX, localY);
+  inputBubble.x = pos.x;
+  inputBubble.y = pos.y;
+  inputBubble.label = info.name || info.id || info.tag || '输入字段';
+  inputBubble.text = info.value || '';
+  inputBubble.visible = true;
+  showSelectPicker.value = false;
+};
+
+const openSelectPicker = (info: any, x: number, y: number, localX: number, localY: number) => {
+  selectOptions.value = info.options;
+  selectedValue.value = info.options.find((o: any) => o.selected)?.value || '';
+  selectTargetX.value = x;
+  selectTargetY.value = y;
+  const pos = positionBubble(localX, localY);
+  selectBubbleX.value = pos.x;
+  selectBubbleY.value = pos.y;
+  selectBubbleLabel.value = info.name || info.id || '下拉字段';
+  selectTargetSelector.value = info.name
+    ? `[name="${info.name}"]`
+    : info.id
+      ? `#${info.id}`
+      : `select:nth-of-type(${info.index || 1})`;
+  showSelectPicker.value = true;
+  closeInputBubble();
+  addLog(true, `检测到下拉框: ${info.name || info.id || info.tag} (${info.options.length} 个选项)`);
+};
+
+const handleInspectedElement = async (info: any, x: number, y: number, localX: number, localY: number) => {
+  if (info.tag === 'SELECT' && info.options?.length > 0) {
+    openSelectPicker(info, x, y, localX, localY);
+  } else if (info.tag === 'INPUT' || info.tag === 'TEXTAREA') {
+    openInputBubble(info, localX, localY);
+    addLog(true, `已聚焦: ${info.tag} ${info.name || info.id || ''}`);
+  } else {
+    closeInputBubble();
+    showSelectPicker.value = false;
+  }
+};
+
+const detectAndHandleElement = async (x: number, y: number, localX: number, localY: number) => {
+  const info = await inspectElementAt(x, y);
+  if (info) {
+    await handleInspectedElement(info, x, y, localX, localY);
   }
 };
 
@@ -400,6 +618,47 @@ const applySelectValue = async () => {
     if (info?.ok) setTimeout(() => refreshScreenshot(), 600);
   } catch (err: any) {
     addLog(false, `下拉失败: ${err.message || err}`);
+  }
+};
+
+const applyTextToFocusedElement = async (text: string) => {
+  if (!device.value || !text) return;
+  const safeText = JSON.stringify(text);
+  const result = await wsStore.send({
+    type: 'cmd:eval',
+    requestId: generateRequestId(),
+    code: `(() => {
+      const el = document.elementFromPoint(${lastClickX}, ${lastClickY})
+        || document.activeElement;
+      if (!el) return JSON.stringify({ok:false, why:'no element found'});
+      const t = el.tagName;
+      if (t !== 'INPUT' && t !== 'TEXTAREA' && t !== 'SELECT')
+        return JSON.stringify({ok:false, why:'not input', tag:t});
+      el.value = ${safeText};
+      el.dispatchEvent(new Event('input', {bubbles:true}));
+      el.dispatchEvent(new Event('change', {bubbles:true}));
+      el.focus();
+      return JSON.stringify({ok:true, tag:t, val:el.value});
+    })()`,
+  });
+  return typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
+};
+
+const submitInputBubble = async () => {
+  if (!inputBubble.text) {
+    ElMessage.warning('请先输入内容');
+    return;
+  }
+
+  try {
+    const info = await applyTextToFocusedElement(inputBubble.text);
+    addLog(true, `附近填写: "${inputBubble.text}" → ${info?.tag || '?'} ${info?.ok ? '✓' : '✗ ' + info?.why}`);
+    if (info?.ok) {
+      closeInputBubble();
+      setTimeout(() => refreshScreenshot(), 600);
+    }
+  } catch (err: any) {
+    addLog(false, `附近填写失败: ${err.message || err}`);
   }
 };
 
@@ -442,26 +701,7 @@ const evalCode = async () => {
 const typeText = async () => {
   if (!device.value || !controlForm.value.text) return;
   try {
-    const safeText = JSON.stringify(controlForm.value.text);
-    const result = await wsStore.send({
-      type: 'cmd:eval',
-      requestId: generateRequestId(),
-      code: `(() => {
-        const el = document.elementFromPoint(${lastClickX}, ${lastClickY})
-          || document.activeElement;
-        if (!el) return JSON.stringify({ok:false, why:'no element found'});
-        const t = el.tagName;
-        if (t !== 'INPUT' && t !== 'TEXTAREA' && t !== 'SELECT')
-          return JSON.stringify({ok:false, why:'not input', tag:t});
-        // Straightforward direct set
-        el.value = ${safeText};
-        el.dispatchEvent(new Event('input', {bubbles:true}));
-        el.dispatchEvent(new Event('change', {bubbles:true}));
-        el.focus();
-        return JSON.stringify({ok:true, tag:t, val:el.value});
-      })()`,
-    });
-    const info = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
+    const info = await applyTextToFocusedElement(controlForm.value.text);
     addLog(true, `输入: "${controlForm.value.text}" → ${info?.tag || '?'} ${info?.ok ? '✓' : '✗ '+info?.why}`);
     controlForm.value.text = '';
     if (info?.ok) setTimeout(() => refreshScreenshot(), 600);
@@ -552,58 +792,134 @@ const generateRequestId = () => `req_${Date.now()}_${requestIdCounter++}`;
 </script>
 
 <style scoped>
-.remote-control { max-width: 1600px; margin: 0 auto; }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.card-header h2 { margin: 0; font-size: 18px; font-weight: 600; }
-.controls { display: flex; gap: 8px; }
-.control-panel { display: flex; flex-direction: column; gap: 16px; }
+.remote-control { max-width: 1800px; margin: 0 auto; padding: 8px 0; }
+.remote-shell { border: none; }
+.card-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.title-block { display: flex; flex-direction: column; gap: 4px; }
+.card-header h2 { margin: 0; font-size: 20px; font-weight: 700; }
+.title-hint { font-size: 12px; color: #7b8190; }
+.controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
 .screenshot-area {
-  min-height: 400px; display: flex; align-items: center; justify-content: center;
-  background: #000; border-radius: 4px; overflow: hidden; cursor: crosshair;
+  position: relative;
+  min-height: 78vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at top, rgba(67, 97, 238, 0.12), transparent 32%),
+    linear-gradient(180deg, #0f172a 0%, #111827 100%);
+  border-radius: 18px;
+  overflow: hidden;
+  cursor: crosshair;
+  outline: none;
+  transition: box-shadow 0.15s ease;
 }
-.screenshot-image { max-width: 100%; max-height: 500px; object-fit: contain; }
-.action-bar { padding-top: 16px; border-top: 1px solid #e0e0e0; position: relative; }
+.screenshot-area.fullscreen { min-height: 100vh; border-radius: 0; }
+.screenshot-area.keyboard-active { box-shadow: 0 0 0 2px #60a5fa inset; }
+.screenshot-image { max-width: 100%; max-height: 78vh; object-fit: contain; }
+.screenshot-area.fullscreen .screenshot-image { max-height: 100vh; }
 
-/* Select picker */
-.select-picker-overlay {
-  position: absolute; top: 0; left: 0; right: 0; z-index: 100;
-  background: rgba(255,255,255,0.95); border-radius: 8px; padding: 16px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+.viewport-toolbar {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 4;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
-.select-picker-card { display: flex; flex-direction: column; gap: 12px; }
-.select-picker-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; }
-.select-picker-body { max-height: 200px; overflow-y: auto; }
+.viewport-hint {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 3;
+  padding: 10px 14px;
+  color: #e5eefc;
+  font-size: 12px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.interaction-bubble {
+  position: absolute;
+  z-index: 6;
+  width: min(320px, calc(100% - 32px));
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(16px);
+}
+.bubble-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+}
+.bubble-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.select-picker-body { max-height: 220px; overflow-y: auto; }
 .select-radio-group { display: flex; flex-direction: column; gap: 6px; width: 100%; }
-.select-radio-item { 
-  padding: 6px 10px; border-radius: 4px; margin: 0 !important;
-  border: 1px solid #eee; width: 100%;
+.select-radio-item {
+  width: 100%;
+  margin: 0 !important;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
 }
-.select-radio-item:hover { background: #f0f7ff; }
-.select-picker-footer { display: flex; justify-content: flex-end; gap: 8px; }
+.select-radio-item:hover { background: #eff6ff; }
 
-/* Form fill panel */
 .form-fill-panel { display: flex; flex-direction: column; gap: 12px; }
-.form-toolbar { display: flex; gap: 8px; }
-.field-list { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.form-toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+.field-list { max-height: calc(100vh - 220px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 .field-item {
-  padding: 8px 12px; background: #fafafa; border-radius: 6px;
+  padding: 10px 12px;
+  background: #fafafa;
+  border-radius: 10px;
   border: 1px solid #f0f0f0;
 }
-.field-item label { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.field-item label { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
 .field-name { font-weight: 500; font-size: 13px; color: #333; }
 .field-type {
-  font-size: 11px; color: #999; background: #f0f0f0; padding: 1px 6px;
-  border-radius: 3px; font-family: monospace;
+  font-size: 11px;
+  color: #999;
+  background: #f0f0f0;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: monospace;
 }
 .field-placeholder { font-size: 11px; color: #bbb; }
 .field-input-row { display: flex; align-items: center; }
 
-/* Logs */
-.log-panel { max-height: 400px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.log-panel { display: flex; flex-direction: column; gap: 8px; }
 .log-entry {
-  display: flex; align-items: center; gap: 8px; font-size: 12px;
-  padding: 8px; background: #f5f5f5; border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 10px;
+  background: #f5f7fb;
+  border-radius: 10px;
 }
 .log-message { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .log-time { color: #999; font-size: 11px; white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .card-header { flex-direction: column; align-items: flex-start; }
+  .controls { width: 100%; justify-content: flex-start; }
+  .screenshot-area { min-height: 60vh; }
+  .screenshot-image { max-height: 60vh; }
+  .viewport-hint { right: 16px; border-radius: 14px; }
+}
 </style>
