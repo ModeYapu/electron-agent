@@ -12,27 +12,68 @@ import { StatusReporter } from './reporter';
 import type { DeviceInfo, ServerDownstreamMessage } from '@electron-agent/shared';
 import type { BrowserWindow } from 'electron';
 import * as os from 'os';
+import * as fs from 'fs';
+import * as path from 'path';
 import { createHash } from 'crypto';
 
-/** Hardware fingerprint — stable device ID derived from MAC + CPU + RAM */
-function hardwareFingerprint(): string {
-  // 1. Primary MAC address (most stable hardware identifier)
+/**
+ * Stable device ID — hardware-derived, immutable once set.
+ *
+ * Priority:
+ *   1. Existing ~/.electron-agent-device-id  (migration from old versions)
+ *   2. Hardware fingerprint → saved to disk → permanent
+ *
+ * Fingerprint inputs (all sorted for deterministic order):
+ *   - ALL non-internal MAC addresses  (sorted, so NIC order / VPN don't matter)
+ *   - CPU model
+ *   - Total RAM
+ *   - Hostname  (avoids VM clone collisions)
+ */
+function resolveDeviceId(): string {
+  const idFile = path.join(os.homedir(), '.electron-agent-device-id');
+
+  // 1. Migration: old file-based ID takes priority
+  try {
+    if (fs.existsSync(idFile)) {
+      const existing = fs.readFileSync(idFile, 'utf-8').trim();
+      if (existing.length > 0) return existing;
+    }
+  } catch {}
+
+  // 2. Hardware fingerprint
+  const parts: string[] = [];
+
+  // ALL non-internal, non-zero MACs — sorted for stable ordering
   const nets = os.networkInterfaces();
-  let mac = '';
-  for (const name of Object.keys(nets)) {
-    const iface = nets[name]?.find(
-      (a) => !a.internal && a.mac !== '00:00:00:00:00:00'
-    );
-    if (iface) { mac = iface.mac; break; }
+  const macs: string[] = [];
+  for (const ifaces of Object.values(nets)) {
+    for (const a of ifaces || []) {
+      if (!a.internal && a.mac !== '00:00:00:00:00:00') {
+        macs.push(a.mac.replace(/[:-]/g, '').toLowerCase());
+      }
+    }
   }
+  parts.push(...macs.sort());
 
-  // 2. CPU model + total RAM
+  // CPU
   const cpu = os.cpus()[0]?.model || '';
-  const ram = os.totalmem().toString();
+  parts.push(cpu);
 
-  // 3. SHA256 hash → 16 hex chars
-  const fingerprint = `${mac}|${cpu}|${ram}`;
-  return createHash('sha256').update(fingerprint).digest('hex').slice(0, 16);
+  // RAM
+  parts.push(os.totalmem().toString());
+
+  // Hostname — prevents VM clone collisions
+  parts.push(os.hostname());
+
+  const fingerprint = parts.join('|');
+  const id = createHash('sha256').update(fingerprint).digest('hex').slice(0, 16);
+
+  // 3. Persist — immutable anchor for future starts
+  try {
+    fs.writeFileSync(idFile, id, 'utf-8');
+  } catch {}
+
+  return id;
 }
 
 export interface AgentConfig {
@@ -65,7 +106,7 @@ export class ElectronAgent {
 
   constructor(private win: BrowserWindow, config: AgentConfig) {
     this.config = config;
-    this.deviceId = hardwareFingerprint();
+    this.deviceId = resolveDeviceId();
     this.deviceInfo = {
       deviceId: this.deviceId,
       name: config.deviceInfo.name || 'Electron Agent',
