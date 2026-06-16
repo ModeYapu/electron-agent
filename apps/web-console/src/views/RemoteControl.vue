@@ -26,17 +26,42 @@
 
           <div class="control-panel">
             <div class="screenshot-area" v-if="device">
-              <img
-                v-if="screenshot"
-                :src="'data:image/jpeg;base64,' + screenshot"
-                alt="Screenshot"
-                class="screenshot-image"
-                @click="handleImageClick"
-              />
+                <img
+                  v-if="screenshot"
+                  :src="'data:image/jpeg;base64,' + screenshot"
+                  alt="Screenshot"
+                  class="screenshot-image"
+                  @click="handleImageClick"
+                  @wheel.prevent="handleScroll"
+                />
               <el-empty v-else description="无截图数据 — 点击「刷新截图」或「开始直播」" />
             </div>
 
             <div class="action-bar">
+              <!-- Select picker overlay -->
+              <div v-if="showSelectPicker" class="select-picker-overlay">
+                <div class="select-picker-card">
+                  <div class="select-picker-header">
+                    <span>🔽 选择下拉选项</span>
+                    <el-button @click="showSelectPicker = false" size="small" circle>✕</el-button>
+                  </div>
+                  <div class="select-picker-body">
+                    <el-radio-group v-model="selectedValue" class="select-radio-group">
+                      <el-radio
+                        v-for="opt in selectOptions"
+                        :key="opt.value"
+                        :value="opt.value"
+                        class="select-radio-item"
+                      >{{ opt.text }} ({{ opt.value }})</el-radio>
+                    </el-radio-group>
+                  </div>
+                  <div class="select-picker-footer">
+                    <el-button @click="showSelectPicker = false" size="small">取消</el-button>
+                    <el-button @click="applySelectValue" type="primary" size="small">确认选择</el-button>
+                  </div>
+                </div>
+              </div>
+
               <el-tabs v-model="activeTab" type="border-card" size="small">
                 <!-- Tab 1: Quick actions -->
                 <el-tab-pane label="快捷操作" name="actions">
@@ -235,12 +260,147 @@ const stopStreaming = () => {
 };
 
 // ===== Screenshot =====
-const handleImageClick = (event: MouseEvent) => {
+const handleImageClick = async (event: MouseEvent) => {
   const target = event.target as HTMLImageElement;
   const rect = target.getBoundingClientRect();
-  const x = event.clientX - rect.left;
-  const y = event.clientY - rect.top;
-  clickAt(x, y);
+  const vpW = wsStore.viewportWidth || target.naturalWidth;
+  const vpH = wsStore.viewportHeight || target.naturalHeight;
+  if (!vpW || !vpH) return;
+  const scaleX = vpW / rect.width;
+  const scaleY = vpH / rect.height;
+  const x = Math.round((event.clientX - rect.left) * scaleX);
+  const y = Math.round((event.clientY - rect.top) * scaleY);
+
+  // Click first, then detect what was clicked
+  await clickAt(x, y);
+
+  // Detect element type at clicked position
+  await detectAndHandleElement(x, y);
+};
+
+const handleScroll = (event: WheelEvent) => {
+  if (!device.value) return;
+  const deltaY = event.deltaY;
+  const deltaX = event.deltaX;
+  wsStore.send({
+    type: 'cmd:scroll',
+    requestId: generateRequestId(),
+    deltaX: Math.round(deltaX),
+    deltaY: Math.round(deltaY),
+  }).then(() => {
+    scrollLogPending.value = `△${Math.round(deltaX)},${Math.round(deltaY)}`;
+    flushScrollLog();
+  }).catch(err => addLog(false, `Scroll failed: ${err}`));
+};
+
+// Throttled scroll logging (max 1 log per 500ms)
+const scrollLogPending = ref('');
+let scrollLogTimer: ReturnType<typeof setTimeout> | null = null;
+const flushScrollLog = () => {
+  if (scrollLogTimer) return;
+  scrollLogTimer = setTimeout(() => {
+    if (scrollLogPending.value) {
+      addLog(true, `滚动: ${scrollLogPending.value}`);
+      scrollLogPending.value = '';
+    }
+    scrollLogTimer = null;
+  }, 500);
+};
+
+// Detect element type at coordinates and handle specially for selects
+const selectOptions = ref<Array<{text: string; value: string; selected: boolean}>>([]);
+const selectedValue = ref('');
+const showSelectPicker = ref(false);
+const selectTargetX = ref(0);
+const selectTargetY = ref(0);
+const selectTargetSelector = ref(''); // CSS selector for precise re-targeting
+
+// Last click position for typeText to re-find the input
+let lastClickX = 0;
+let lastClickY = 0;
+
+const detectAndHandleElement = async (x: number, y: number) => {
+  if (!device.value) return;
+  lastClickX = x;
+  lastClickY = y;
+  try {
+    const result = await wsStore.send({
+      type: 'cmd:eval',
+      requestId: generateRequestId(),
+      code: `(() => {
+        const el = document.elementFromPoint(${x}, ${y});
+        if (!el) return { tag: '' };
+        const tag = el.tagName;
+        const idx = el.name || el.id ? (() => {
+          const sel = el.name ? '[name="' + el.name + '"]' : '#' + el.id;
+          const all = document.querySelectorAll(sel);
+          for (let i = 0; i < all.length; i++) if (all[i] === el) return i + 1;
+          return 1;
+        })() : 1;
+        const result = {
+          tag,
+          type: el.getAttribute('type') || '',
+          name: el.name || '',
+          id: el.id || '',
+          value: el.value || '',
+          index: idx,
+        };
+        if (tag === 'SELECT') {
+          result.options = Array.from(el.options).map(o => ({text: o.text, value: o.value, selected: o.selected}));
+        }
+        try { el.focus(); } catch(e) {}
+        return result;
+      })()`,
+    });
+    if (result.success && result.data) {
+      const info = result.data as any;
+      if (info.tag === 'SELECT' && info.options?.length > 0) {
+        selectOptions.value = info.options;
+        selectedValue.value = info.options.find((o: any) => o.selected)?.value || '';
+        selectTargetX.value = x;
+        selectTargetY.value = y;
+        // Build a durable selector from the element's name or id
+        selectTargetSelector.value = info.name
+          ? `[name="${info.name}"]`
+          : info.id
+            ? `#${info.id}`
+            : `select:nth-of-type(${info.index || 1})`;
+        showSelectPicker.value = true;
+        addLog(true, `检测到下拉框: ${info.name || info.id || info.tag} (${info.options.length} 个选项)`);
+      } else if (info.tag === 'INPUT' || info.tag === 'TEXTAREA') {
+        addLog(true, `已聚焦: ${info.tag} ${info.name || info.id || ''}`);
+      }
+    }
+  } catch (err: any) {
+    // Silent — detection is best-effort
+  }
+};
+
+const applySelectValue = async () => {
+  if (!device.value || !selectedValue.value) return;
+  try {
+    const safeVal = JSON.stringify(selectedValue.value);
+    const selector = selectTargetSelector.value || 'select';
+    const result = await wsStore.send({
+      type: 'cmd:eval',
+      requestId: generateRequestId(),
+      code: `(() => {
+        const el = document.querySelector('${selector}');
+        if (!el || el.tagName !== 'SELECT')
+          return JSON.stringify({ok:false, why:'not found', sel:'${selector}'});
+        el.value = ${safeVal};
+        el.dispatchEvent(new Event('change', {bubbles:true}));
+        el.dispatchEvent(new Event('input', {bubbles:true}));
+        return JSON.stringify({ok:true, tag:'SELECT', val:el.value, sel:'${selector}'});
+      })()`,
+    });
+    const info = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
+    addLog(true, `下拉 ${selector}: ${selectedValue.value} → ${info?.ok ? '✓' : '✗ '+info?.why}`);
+    showSelectPicker.value = false;
+    if (info?.ok) setTimeout(() => refreshScreenshot(), 600);
+  } catch (err: any) {
+    addLog(false, `下拉失败: ${err.message || err}`);
+  }
 };
 
 const refreshScreenshot = async () => {
@@ -282,10 +442,30 @@ const evalCode = async () => {
 const typeText = async () => {
   if (!device.value || !controlForm.value.text) return;
   try {
-    await wsStore.send({ type: 'cmd:type', requestId: generateRequestId(), text: controlForm.value.text });
-    addLog(true, `输入文本: ${controlForm.value.text}`);
+    const safeText = JSON.stringify(controlForm.value.text);
+    const result = await wsStore.send({
+      type: 'cmd:eval',
+      requestId: generateRequestId(),
+      code: `(() => {
+        const el = document.elementFromPoint(${lastClickX}, ${lastClickY})
+          || document.activeElement;
+        if (!el) return JSON.stringify({ok:false, why:'no element found'});
+        const t = el.tagName;
+        if (t !== 'INPUT' && t !== 'TEXTAREA' && t !== 'SELECT')
+          return JSON.stringify({ok:false, why:'not input', tag:t});
+        // Straightforward direct set
+        el.value = ${safeText};
+        el.dispatchEvent(new Event('input', {bubbles:true}));
+        el.dispatchEvent(new Event('change', {bubbles:true}));
+        el.focus();
+        return JSON.stringify({ok:true, tag:t, val:el.value});
+      })()`,
+    });
+    const info = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
+    addLog(true, `输入: "${controlForm.value.text}" → ${info?.tag || '?'} ${info?.ok ? '✓' : '✗ '+info?.why}`);
     controlForm.value.text = '';
-  } catch (err) { addLog(false, `输入失败: ${err}`); }
+    if (info?.ok) setTimeout(() => refreshScreenshot(), 600);
+  } catch (err: any) { addLog(false, `输入失败: ${err.message || err}`); }
 };
 
 // ===== Form filling =====
@@ -382,7 +562,24 @@ const generateRequestId = () => `req_${Date.now()}_${requestIdCounter++}`;
   background: #000; border-radius: 4px; overflow: hidden; cursor: crosshair;
 }
 .screenshot-image { max-width: 100%; max-height: 500px; object-fit: contain; }
-.action-bar { padding-top: 16px; border-top: 1px solid #e0e0e0; }
+.action-bar { padding-top: 16px; border-top: 1px solid #e0e0e0; position: relative; }
+
+/* Select picker */
+.select-picker-overlay {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 100;
+  background: rgba(255,255,255,0.95); border-radius: 8px; padding: 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+}
+.select-picker-card { display: flex; flex-direction: column; gap: 12px; }
+.select-picker-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; }
+.select-picker-body { max-height: 200px; overflow-y: auto; }
+.select-radio-group { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.select-radio-item { 
+  padding: 6px 10px; border-radius: 4px; margin: 0 !important;
+  border: 1px solid #eee; width: 100%;
+}
+.select-radio-item:hover { background: #f0f7ff; }
+.select-picker-footer { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* Form fill panel */
 .form-fill-panel { display: flex; flex-direction: column; gap: 12px; }

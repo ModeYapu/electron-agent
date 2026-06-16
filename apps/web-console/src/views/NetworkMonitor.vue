@@ -31,7 +31,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
-import { useWebSocketStore, getStoredJwt } from '@/stores/websocket';
+import { useWebSocketStore, getApiBase, getStoredJwt } from '@/stores/websocket';
 import NetworkPanel from '@/components/NetworkPanel.vue';
 import type { NetworkRequest } from '@electron-agent/shared';
 
@@ -62,7 +62,7 @@ const fetchHistory = async () => {
   const token = getStoredJwt();
   if (!token) return;
   try {
-    const res = await fetch(`/api/network?deviceId=${selectedDeviceId.value}&limit=1000`, {
+    const res = await fetch(`${getApiBase()}/api/network?deviceId=${selectedDeviceId.value}&limit=1000`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) {

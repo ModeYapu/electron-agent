@@ -103,7 +103,15 @@ export class CommandExecutor {
   private async executeClick(command: Extract<ServerDownstreamMessage, { type: 'cmd:click' }>): Promise<CommandResult> {
     const wc = this.win.webContents;
 
-    // 使用 CDP 发送鼠标事件
+    // 1. Move mouse to target position (required for proper hit-testing)
+    await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: command.x,
+      y: command.y,
+      button: 'none',
+    });
+
+    // 2. Press
     await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
       type: 'mousePressed',
       x: command.x,
@@ -114,6 +122,7 @@ export class CommandExecutor {
 
     await new Promise(resolve => setTimeout(resolve, 50));
 
+    // 3. Release
     await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
       type: 'mouseReleased',
       x: command.x,

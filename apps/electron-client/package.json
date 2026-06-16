@@ -5,7 +5,7 @@
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "tsx watch src/main/index.ts",
-    "build": "tsc && electron-builder",
+    "build": "tsc && xcopy src\\renderer dist\\renderer\\ /E /Y /I && copy src\\main\\preload.js dist\\main\\ && copy config.default.json dist\\config.json && electron-builder",
     "verify": "tsc --noEmit"
   },
   "dependencies": {

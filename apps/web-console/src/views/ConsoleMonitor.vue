@@ -31,7 +31,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
-import { useWebSocketStore, getStoredJwt } from '@/stores/websocket';
+import { useWebSocketStore, getStoredJwt, getApiBase } from '@/stores/websocket';
 import ConsolePanel from '@/components/ConsolePanel.vue';
 import type { ConsoleLog } from '@electron-agent/shared';
 
@@ -54,7 +54,7 @@ const fetchHistory = async () => {
   const token = getStoredJwt();
   if (!token) return;
   try {
-    const res = await fetch(`/api/console?deviceId=${selectedDeviceId.value}&limit=1000`, {
+    const res = await fetch(`${getApiBase()}/api/console?deviceId=${selectedDeviceId.value}&limit=1000`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) {

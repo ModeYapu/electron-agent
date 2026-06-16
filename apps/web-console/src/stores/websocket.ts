@@ -25,15 +25,21 @@ type SendableCommand = {
   [K in ServerDownstreamMessage['type']]: Omit<Extract<ServerDownstreamMessage, { type: K }>, 'deviceId' | 'requestId'> & { requestId?: string };
 }[ServerDownstreamMessage['type']];
 
+// Declare build-time injected globals from vite.config.ts define
+declare const __API_URL__: string;
+declare const __WS_URL__: string;
+
 const JWT_STORAGE_KEY = 'ea_jwt';
-// Derive the WS endpoint from the page origin so the Vite/dev proxy (or the
-// production reverse proxy) routes /ws to the relay. VITE_WS_URL can override.
-const WS_BASE = (() => {
-  const override = (import.meta as any).env?.VITE_WS_URL;
-  if (override) return override;
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${window.location.host}/ws`;
-})();
+
+// WebSocket endpoint. Falls back to same-origin /ws.
+const WS_BASE = __WS_URL__ || 'ws://localhost:9300/ws' ||
+  `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+
+// API base for fetch() calls. Falls back to relay default.
+const API_BASE = __API_URL__ || 'http://localhost:9300' || window.location.origin;
+
+// Export for use in other views
+export function getApiBase(): string { return API_BASE; }
 
 // Exported so any view making a raw HTTP /api call reads the same JWT.
 export function getStoredJwt(): string | null {
@@ -54,6 +60,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const devices = ref<Device[]>([]);
   const currentDevice = ref<Device | null>(null);
   const currentScreenshot = ref<string | null>(null);
+  const viewportWidth = ref(0);
+  const viewportHeight = ref(0);
   const networkLogs = ref<Array<{ deviceId: string; request: any; timestamp: number }>>([]);
   const consoleLogs = ref<Array<{ deviceId: string; log: any; timestamp: number }>>([]);
   const errorLogs = ref<Array<{ deviceId: string; error: any; timestamp: number }>>([]);
@@ -72,7 +80,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const login = async (username: string, password: string): Promise<boolean> => {
     authError.value = null;
     try {
-      const res = await fetch('/api/login', {
+      const res = await fetch(`${API_BASE}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
@@ -334,6 +342,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
       case 'server:screenshot':
         if (currentDevice.value?.info.deviceId === message.deviceId) {
           currentScreenshot.value = message.data.data;
+          viewportWidth.value = message.data.width || 0;
+          viewportHeight.value = message.data.height || 0;
         }
         break;
 
@@ -413,6 +423,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const selectDevice = (device: Device) => {
     currentDevice.value = device;
     currentScreenshot.value = null;
+    viewportWidth.value = 0;
+    viewportHeight.value = 0;
     networkLogs.value = [];
     consoleLogs.value = [];
     errorLogs.value = [];
@@ -449,6 +461,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
     devices,
     currentDevice,
     currentScreenshot,
+    viewportWidth,
+    viewportHeight,
     networkLogs,
     consoleLogs,
     errorLogs,

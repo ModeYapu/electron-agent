@@ -86,7 +86,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { useWebSocketStore, getStoredJwt } from '@/stores/websocket';
+import { useWebSocketStore, getStoredJwt, getApiBase } from '@/stores/websocket';
 import type { AuditEvent } from '@electron-agent/shared';
 import { ElMessage } from 'element-plus';
 
@@ -260,7 +260,7 @@ const fetchAuditData = async () => {
       limit: '10000',
     });
 
-    const response = await fetch(`/api/audit?${params}`, {
+    const response = await fetch(`${getApiBase()}/api/audit?${params}`, {
       headers: {
         'Authorization': `Bearer ${token}`,
       },

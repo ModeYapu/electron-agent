@@ -31,7 +31,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
-import { useWebSocketStore, getStoredJwt } from '@/stores/websocket';
+import { useWebSocketStore, getStoredJwt, getApiBase } from '@/stores/websocket';
 import ErrorPanel from '@/components/ErrorPanel.vue';
 import type { JSError } from '@electron-agent/shared';
 
@@ -56,7 +56,7 @@ const fetchHistory = async () => {
   const token = getStoredJwt();
   if (!token) return;
   try {
-    const res = await fetch(`/api/errors?deviceId=${selectedDeviceId.value}&limit=1000`, {
+    const res = await fetch(`${getApiBase()}/api/errors?deviceId=${selectedDeviceId.value}&limit=1000`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) {

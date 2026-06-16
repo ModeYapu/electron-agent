@@ -3,36 +3,44 @@
  * Electron Agent 核心模块
  */
 
-import { BrowserWindow, app } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
-import type { DeviceInfo, ServerDownstreamMessage, CommandResult } from '@electron-agent/shared';
 import { ConnectionManager } from './connection';
 import { CDPBridge } from './cdp-bridge';
 import { CaptureService } from './capture';
 import { CommandExecutor } from './executor';
 import { StatusReporter } from './reporter';
+import type { DeviceInfo, ServerDownstreamMessage } from '@electron-agent/shared';
+import type { BrowserWindow } from 'electron';
 
 export interface AgentConfig {
   serverUrl: string;
   agentToken: string;
-  deviceInfo: Partial<DeviceInfo>;
-  reconnectInterval?: number;
-  heartbeatInterval?: number;
-  captureQuality?: number;
+  deviceInfo: {
+    name: string;
+    appVersion?: string;
+    tags?: string[];
+  };
+  reconnectInterval: number;
+  heartbeatInterval: number;
+  captureQuality: number;
+  onCommandLog?: (log: { ts: string; type: string; requestId: string; detail: string }) => void;
 }
 
+const COMMAND_LOG_PREFIX = '[AGENT]';
+
 export class ElectronAgent {
+  private deviceId: string;
+  private deviceInfo: DeviceInfo;
+  private config: AgentConfig;
   private connection: ConnectionManager;
   private cdpBridge: CDPBridge;
   private captureService: CaptureService;
   private commandExecutor: CommandExecutor;
   private statusReporter: StatusReporter;
-  private deviceId: string;
-  private deviceInfo: DeviceInfo;
 
-  constructor(private win: BrowserWindow, private config: AgentConfig) {
+  constructor(private win: BrowserWindow, config: AgentConfig) {
+    this.config = config;
     this.deviceId = uuidv4();
-
     this.deviceInfo = {
       deviceId: this.deviceId,
       name: config.deviceInfo.name || 'Electron Agent',
@@ -46,13 +54,13 @@ export class ElectronAgent {
     this.connection = new ConnectionManager({
       serverUrl: config.serverUrl,
       agentToken: config.agentToken,
-      reconnectInterval: config.reconnectInterval || 5000,
-      heartbeatInterval: config.heartbeatInterval || 30000,
+      reconnectInterval: config.reconnectInterval,
+      heartbeatInterval: config.heartbeatInterval,
     });
 
     this.cdpBridge = new CDPBridge(win);
     this.captureService = new CaptureService(win, {
-      quality: config.captureQuality || 60,
+      quality: config.captureQuality,
     });
 
     this.statusReporter = new StatusReporter(win, {
@@ -68,13 +76,9 @@ export class ElectronAgent {
   }
 
   async start(): Promise<void> {
-    // 先附加 CDP
     await this.cdpBridge.attach();
-
-    // 连接服务器
     this.connection.connect(this.deviceId);
-
-    console.log(`Electron Agent started: ${this.deviceId}`);
+    console.log(`${COMMAND_LOG_PREFIX} Electron Agent started: ${this.deviceId}`);
   }
 
   stop(): void {
@@ -82,6 +86,7 @@ export class ElectronAgent {
     this.statusReporter.destroy();
     this.connection.disconnect();
     this.cdpBridge.detach();
+    console.log(`${COMMAND_LOG_PREFIX} Agent stopped`);
   }
 
   getDeviceId(): string {
@@ -96,27 +101,54 @@ export class ElectronAgent {
     return await this.cdpBridge.getDOM();
   }
 
+  private logCommand(command: ServerDownstreamMessage): void {
+    const ts = new Date().toISOString().slice(11, 23);
+    const { type, requestId } = command as any;
+    const detail = this.commandDetail(command);
+    console.log(`${COMMAND_LOG_PREFIX} [${ts}] ⬇ ${type} (${requestId})${detail}`);
+    // Forward to renderer via callback (IPC)
+    if (this.config.onCommandLog) {
+      this.config.onCommandLog({ ts, type, requestId, detail });
+    }
+  }
+
+  private commandDetail(command: ServerDownstreamMessage): string {
+    const c = command as any;
+    switch (c.type) {
+      case 'cmd:click': return ` x=${c.x} y=${c.y} btn=${c.button}`;
+      case 'cmd:type': return ` text="${c.text?.slice(0, 30)}"`;
+      case 'cmd:navigate': return ` url=${c.url}`;
+      case 'cmd:eval': return ` js="${c.code?.slice(0, 50)}"`;
+      case 'cmd:scroll': return ` delta=${c.deltaX},${c.deltaY}`;
+      case 'cmd:startCapture': return ` fps=${c.fps}`;
+      case 'cmd:fillForm': return ` fields=${Object.keys(c.fields || {}).length}`;
+      case 'cmd:getFields': return '';
+      case 'cmd:screenshot': return '';
+      case 'cmd:getDOM': return '';
+      default: return '';
+    }
+  }
+
   private setupEventHandlers(): void {
-    // 连接事件
     this.connection.on('connected', () => {
       this.registerDevice();
       this.statusReporter.reportPageChange();
+      console.log(`${COMMAND_LOG_PREFIX} ✅ Connected to relay`);
     });
 
     this.connection.on('disconnected', () => {
-      console.log('Disconnected from server');
+      console.log(`${COMMAND_LOG_PREFIX} ❌ Disconnected from relay`);
     });
 
     this.connection.on('error', (err) => {
-      console.error('Connection error:', err);
+      console.error(`${COMMAND_LOG_PREFIX} Connection error:`, err);
     });
 
-    // 接收命令
-    this.connection.on('command', (command: ServerDownstreamMessage) => {
+    this.connection.on('command', (command) => {
+      this.logCommand(command);
       this.handleCommand(command);
     });
 
-    // CDP 事件
     this.cdpBridge.on('console', (log) => {
       this.statusReporter.reportConsoleLog(log);
     });
@@ -144,34 +176,32 @@ export class ElectronAgent {
         this.captureService.startCaptureLoop(command.fps, (screenshot) => {
           this.statusReporter.reportScreenshot(screenshot);
         });
+        this.statusReporter.reportCommandResult(command.requestId, true, 'Capture started');
         break;
 
       case 'cmd:stopCapture':
         this.captureService.stopCaptureLoop();
+        this.statusReporter.reportCommandResult(command.requestId, true, 'Capture stopped');
         break;
 
       case 'cmd:screenshot':
         const screenshot = await this.captureService.capture();
         this.statusReporter.reportScreenshot(screenshot);
+        this.statusReporter.reportCommandResult(command.requestId, true, screenshot);
         break;
 
       case 'cmd:subscribeNetwork':
         this.statusReporter.setNetworkEnabled(command.enable);
+        this.statusReporter.reportCommandResult(command.requestId, true, 'Network subscription updated');
         break;
 
       case 'cmd:subscribeConsole':
         this.statusReporter.setConsoleEnabled(command.enable);
+        this.statusReporter.reportCommandResult(command.requestId, true, 'Console subscription updated');
         break;
 
       default:
-        // 其他命令由 executor 处理
         this.commandExecutor.execute(command);
     }
   }
 }
-
-export * from './connection';
-export * from './cdp-bridge';
-export * from './capture';
-export * from './executor';
-export * from './reporter';
