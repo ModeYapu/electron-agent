@@ -31,17 +31,11 @@ declare const __WS_URL__: string;
 
 const JWT_STORAGE_KEY = 'ea_jwt';
 
-// WebSocket endpoint. Env var > same-origin (only if port 9300 or no port) > localhost fallback.
-// When web-console runs on a different port (dev mode), skip same-origin to avoid hitting itself.
-const _sameOriginPortOk = window.location.port === '9300' || !window.location.port;
-const WS_BASE = __WS_URL__ ||
-  (_sameOriginPortOk ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws` : '') ||
-  'ws://localhost:9300/ws';
-
-// API base for fetch() calls. Env var > same-origin (only if port 9300 or no port) > localhost fallback.
-const API_BASE = __API_URL__ ||
-  (_sameOriginPortOk ? window.location.origin : '') ||
-  'http://localhost:9300';
+// API / WebSocket base.  Injected at build time by vite.config.ts → define.
+// Defaults to WSL host IP (10.10.1.167:9300) so the Windows browser can
+// reach the relay-server inside WSL.  Override via VITE_API_URL / VITE_WS_URL.
+const API_BASE = __API_URL__;
+const WS_BASE  = __WS_URL__;
 
 // Export for use in other views
 export function getApiBase(): string { return API_BASE; }
