@@ -3,6 +3,7 @@
  * 中继服务器 - 设备注册、指令转发、广播
  */
 
+import 'dotenv/config';
 import http from 'http';
 import crypto from 'crypto';
 import express from 'express';
