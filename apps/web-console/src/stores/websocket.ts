@@ -31,12 +31,13 @@ declare const __WS_URL__: string;
 
 const JWT_STORAGE_KEY = 'ea_jwt';
 
-// WebSocket endpoint. Falls back to same-origin /ws.
-const WS_BASE = __WS_URL__ || 'ws://localhost:9300/ws' ||
-  `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+// WebSocket endpoint. Env var > same-origin > localhost fallback.
+const WS_BASE = __WS_URL__ ||
+  `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws` ||
+  'ws://localhost:9300/ws';
 
-// API base for fetch() calls. Falls back to relay default.
-const API_BASE = __API_URL__ || 'http://localhost:9300' || window.location.origin;
+// API base for fetch() calls. Env var > same-origin > localhost fallback.
+const API_BASE = __API_URL__ || window.location.origin || 'http://localhost:9300';
 
 // Export for use in other views
 export function getApiBase(): string { return API_BASE; }
