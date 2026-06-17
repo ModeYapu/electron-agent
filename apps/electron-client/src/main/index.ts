@@ -56,11 +56,12 @@ function loadConfig(): AgentConfig {
   if (process.env.AGENT_TOKEN)       envConfig.agentToken = process.env.AGENT_TOKEN;
   if (process.env.H5_URL)            envConfig.h5Url = process.env.H5_URL;
 
-  // 4. 合并优先级：env > 用户设置 > 内置默认 > 硬编码兜底
+  // 4. 合并优先级：env > 内置（构建时） > 用户保存 > 硬编码兜底
+  //    内置优先于用户保存，确保新版本的默认 token 不会被旧用户配置覆盖
   return {
-    serverUrl:  envConfig.serverUrl  ?? userConfig.serverUrl  ?? builtinConfig.serverUrl  ?? DEFAULT_CONFIG.serverUrl,
-    agentToken: envConfig.agentToken ?? userConfig.agentToken ?? builtinConfig.agentToken ?? DEFAULT_CONFIG.agentToken,
-    h5Url:      envConfig.h5Url      ?? userConfig.h5Url      ?? builtinConfig.h5Url      ?? DEFAULT_CONFIG.h5Url,
+    serverUrl:  envConfig.serverUrl  ?? builtinConfig.serverUrl  ?? userConfig.serverUrl  ?? DEFAULT_CONFIG.serverUrl,
+    agentToken: envConfig.agentToken ?? builtinConfig.agentToken ?? userConfig.agentToken ?? DEFAULT_CONFIG.agentToken,
+    h5Url:      envConfig.h5Url      ?? builtinConfig.h5Url      ?? userConfig.h5Url      ?? DEFAULT_CONFIG.h5Url,
   };
 }
 
