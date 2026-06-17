@@ -334,10 +334,17 @@ function handleWebConnection(ws: WebSocket, role: 'admin' | 'viewer'): void {
   commandBus.registerWeb(ws, role);
 
   // 发送当前设备列表
-  ws.send(JSON.stringify({
+  const devices = deviceRegistry.getAllDevices();
+  console.log(`[Web] Sending server:devices — ${devices.length} device(s)`);
+  const payload = JSON.stringify({
     type: 'server:devices',
-    devices: deviceRegistry.getAllDevices(),
-  } as ServerBroadcastMessage));
+    devices,
+  } as ServerBroadcastMessage);
+  console.log(`[Web] Payload size: ${payload.length} bytes, readyState: ${ws.readyState}`);
+  ws.send(payload, (err) => {
+    if (err) console.error(`[Web] ws.send error:`, err);
+    else console.log(`[Web] server:devices sent OK`);
+  });
 
   ws.on('message', (data: Buffer) => {
     try {

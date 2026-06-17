@@ -499,6 +499,9 @@
       };
 
       // ===== Agent integration =====
+      // cmdLogCount 置于顶层作用域，toggleCmdLog / clearCmdLogs 才能从 onclick 访问。
+      var cmdLogCount = 0;
+
       function initAgentIntegration() {
         if (!window.electronAgent) return;
 
@@ -533,7 +536,6 @@
         });
 
         // 监听命令日志
-        var cmdLogCount = 0;
         window.electronAgent.onCommandLog(function(log) {
           cmdLogCount++;
           var section = document.getElementById('cmdLogSection');
@@ -565,7 +567,6 @@
         cmdLogCount = 0;
         body.innerHTML = '';
         title.textContent = '📋 命令日志 (0)';
-      }
       }
 
       // 延迟初始化，等 preload 完成

@@ -133,9 +133,17 @@ export const useWebSocketStore = defineStore('websocket', () => {
       console.log('WebSocket connected');
     };
 
-    ws.value.onclose = () => {
+    ws.value.onclose = (event) => {
       connected.value = false;
       console.log('WebSocket disconnected');
+      if (event.code === 1008) {
+        jwt.value = null;
+        role.value = null;
+        authError.value = event.reason || 'Authentication failed';
+        localStorage.removeItem(JWT_STORAGE_KEY);
+        devices.value = [];
+        currentDevice.value = null;
+      }
       // P0 COMMAND RECEIPT: Reject all pending requests on disconnect
       for (const [requestId, pending] of pendingRequests.value) {
         pending.reject('WebSocket disconnected');

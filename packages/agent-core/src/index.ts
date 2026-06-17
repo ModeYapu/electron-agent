@@ -184,7 +184,7 @@ export class ElectronAgent {
       case 'cmd:click': return ` x=${c.x} y=${c.y} btn=${c.button}`;
       case 'cmd:type': return ` text="${c.text?.slice(0, 30)}"`;
       case 'cmd:navigate': return ` url=${c.url}`;
-      case 'cmd:eval': return ` js="${c.code?.slice(0, 50)}"`;
+      case 'cmd:eval': return ' script';
       case 'cmd:scroll': return ` delta=${c.deltaX},${c.deltaY}`;
       case 'cmd:startCapture': return ` fps=${c.fps}`;
       case 'cmd:fillForm': return ` fields=${Object.keys(c.fields || {}).length}`;

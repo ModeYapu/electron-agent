@@ -65,13 +65,16 @@ function injectPermissionStyles() {
     #__ea_perm_icon { font-size: 40px; margin-bottom: 12px; }
     #__ea_perm_title { font-size: 18px; font-weight: 600; color: #1a1a1a; margin-bottom: 6px; }
     #__ea_perm_body { font-size: 14px; color: #666; margin-bottom: 6px; }
-    #__ea_perm_cmd { 
-      font-size: 12px; font-family: monospace; color: #999;
-      background: #f5f5f5; padding: 6px 12px; border-radius: 6px;
-      display: inline-block; margin-bottom: 20px;
-    }
+    #__ea_perm_hint { font-size: 12px; color: #999; margin-bottom: 20px; }
     #__ea_perm_countdown { font-size: 12px; color: #bbb; margin-bottom: 16px; }
     #__ea_perm_btns { display: flex; gap: 12px; justify-content: center; }
+    #__ea_perm_notice {
+      position: fixed; right: 20px; bottom: 20px; z-index: 2147483647;
+      background: rgba(0,0,0,0.78); color: #fff; border-radius: 8px;
+      padding: 10px 14px; font-size: 13px; box-shadow: 0 6px 18px rgba(0,0,0,0.2);
+      opacity: 0; transform: translateY(8px); transition: opacity 0.18s, transform 0.18s;
+    }
+    #__ea_perm_notice.__ea_show { opacity: 1; transform: translateY(0); }
     .__ea_btn {
       padding: 10px 28px; border-radius: 8px; font-size: 14px; font-weight: 500;
       border: none; cursor: pointer; transition: all 0.15s;
@@ -84,7 +87,41 @@ function injectPermissionStyles() {
   document.head.appendChild(style);
 }
 
-function showPermissionPrompt(requestId, cmdType, cmdDetail) {
+function operationName(cmdType) {
+  const names = {
+    'cmd:click': '点击页面',
+    'cmd:type': '输入内容',
+    'cmd:key': '键盘操作',
+    'cmd:navigate': '页面跳转',
+    'cmd:eval': '页面脚本操作',
+    'cmd:scroll': '页面滚动',
+    'cmd:setCookie': '修改 Cookie',
+    'cmd:deleteCookie': '删除 Cookie',
+    'cmd:setStorage': '修改本地存储',
+    'cmd:clearStorage': '清空本地存储',
+    'cmd:fillForm': '填写表单',
+  };
+  return names[cmdType] || '远程操作';
+}
+
+function showRemoteOperationNotice(cmdType) {
+  injectPermissionStyles();
+  const old = document.getElementById('__ea_perm_notice');
+  if (old) old.remove();
+
+  const notice = document.createElement('div');
+  notice.id = '__ea_perm_notice';
+  notice.textContent = '管理端正在执行远程操作：' + operationName(cmdType);
+  document.body.appendChild(notice);
+
+  requestAnimationFrame(() => notice.classList.add('__ea_show'));
+  setTimeout(() => {
+    notice.classList.remove('__ea_show');
+    setTimeout(() => notice.remove(), 220);
+  }, 1800);
+}
+
+function showPermissionPrompt(requestId, cmdType) {
   injectPermissionStyles();
 
   // Remove existing overlay if any
@@ -106,8 +143,8 @@ function showPermissionPrompt(requestId, cmdType, cmdDetail) {
     <div id="__ea_perm_card">
       <div id="__ea_perm_icon">🔒</div>
       <div id="__ea_perm_title">远程操作请求</div>
-      <div id="__ea_perm_body">管理端正在请求执行操作：</div>
-      <div id="__ea_perm_cmd">${escapeHtml(cmdType)}${escapeHtml(cmdDetail)}</div>
+      <div id="__ea_perm_body">管理端正在请求远程控制权限</div>
+      <div id="__ea_perm_hint">本次同意后，当前客户端运行期间不再重复确认。</div>
       <div id="__ea_perm_countdown">${countdown} 秒后自动拒绝</div>
       <div id="__ea_perm_btns">
         <button class="__ea_btn __ea_btn_deny" id="__ea_perm_deny">拒绝</button>
@@ -143,11 +180,11 @@ function showPermissionPrompt(requestId, cmdType, cmdDetail) {
   }, PERMISSION_TIMEOUT);
 }
 
-function escapeHtml(str) {
-  return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 // Listen for permission requests from main process
-ipcRenderer.on('agent:permissionRequest', (_event, { requestId, cmdType, cmdDetail }) => {
-  showPermissionPrompt(requestId, cmdType, cmdDetail);
+ipcRenderer.on('agent:permissionRequest', (_event, { requestId, cmdType }) => {
+  showPermissionPrompt(requestId, cmdType);
+});
+
+ipcRenderer.on('agent:remoteOperationNotice', (_event, { cmdType }) => {
+  showRemoteOperationNotice(cmdType);
 });

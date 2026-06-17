@@ -55,7 +55,11 @@ onMounted(() => {
 watch(
   () => wsStore.isAuthenticated,
   (authed) => {
-    if (authed) wsStore.connect();
+    if (authed) {
+      wsStore.connect();
+    } else if (route.path !== '/login') {
+      router.push('/login');
+    }
   }
 );
 

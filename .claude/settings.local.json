@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk '/<script>/{flag=1} flag{print NR\": \"$0} /<\\\\/script>/{flag=0}' apps/electron-client/src/renderer/index.html)",
+      "Bash(awk 'NR>=1{ for\\(i=1;i<=length\\($0\\);i++\\){ c=substr\\($0,i,1\\); if\\(c==\"{\"\\) open++; else if\\(c==\"}\"\\) close++; } } END{ print \"open=\" open \" close=\" close }')"
+    ]
+  }
+}

@@ -10,6 +10,7 @@ import fs from 'fs';
 
 let mainWindow: BrowserWindow | null = null;
 let agent: ElectronAgent | null = null;
+let remoteControlAllowed = false;
 
 // ========== 权限确认 ==========
 const pendingPermissionRequests = new Map<string, {
@@ -117,6 +118,9 @@ function setupIPC() {
     if (pending) {
       clearTimeout(pending.timeout);
       pendingPermissionRequests.delete(requestId);
+      if (allowed) {
+        remoteControlAllowed = true;
+      }
       pending.resolve(allowed);
     }
   });
@@ -174,12 +178,19 @@ function initAgent() {
     return;
   }
 
+  // Read version from package.json so it stays in sync with electron-builder
+  let pkgVersion = '0.1.0';
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    pkgVersion = require('../../package.json').version;
+  } catch (_) { /* fallback */ }
+
   agent = new ElectronAgent(mainWindow, {
     serverUrl: cfg.serverUrl,
     agentToken: cfg.agentToken,
     deviceInfo: {
       name: 'Demo Electron Client',
-      appVersion: '0.1.0',
+      appVersion: pkgVersion,
       tags: ['demo', 'test'],
     },
     reconnectInterval: 5000,
@@ -191,6 +202,15 @@ function initAgent() {
       }
     },
     onPermissionRequired: (cmd) => {
+      if (remoteControlAllowed) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('agent:remoteOperationNotice', {
+            cmdType: cmd.type,
+          });
+        }
+        return Promise.resolve(true);
+      }
+
       return new Promise((resolve) => {
         const requestId = cmd.requestId || `perm_${Date.now()}`;
         // 10s timeout
