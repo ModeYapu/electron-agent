@@ -241,6 +241,7 @@ app.get('/api/errors', (req, res) => {
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws: WebSocket, req) => {
+  console.log('[DEBUG] wss.on(connection) fired, url:', req.url);
   const url = req.url || '';
   const urlObj = new URL(url, `http://${req.headers.host}`);
   const deviceId = urlObj.searchParams.get('deviceId');
@@ -268,6 +269,8 @@ wss.on('connection', (ws: WebSocket, req) => {
 
     ws.once('message', (data: Buffer) => {
       clearTimeout(authTimeout);
+      const raw = data.toString();
+      console.log('[AUTH-DEBUG] received first message:', raw.substring(0, 120));
       try {
         const msg = JSON.parse(data.toString());
         if (msg.type !== 'auth' || !msg.token) {
@@ -380,6 +383,7 @@ function handleWebConnection(ws: WebSocket, role: 'admin' | 'viewer'): void {
 
 function handleAgentMessage(message: AgentUpstreamMessage, ws: WebSocket): void {
   const { deviceId } = message;
+  console.log(`[Agent-MSG] ${deviceId?.slice(0,8)}... type=${message.type}`);
 
   switch (message.type) {
     case 'agent:register':
