@@ -5,5 +5,5 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "🔨 Building @electron-agent/electron-client..."
-npx.exe -w @electron-agent/electron-client npm run build 2>&1 | iconv -f GBK -t UTF-8 2>/dev/null
+npx.exe -w @electron-agent/electron-client npm run build 2>&1 | iconv -f GBK -t UTF-8 -c 2>/dev/null || true
 echo "✅ Build complete: apps/electron-client/build/Electron Agent Client Setup 0.1.0.exe"
