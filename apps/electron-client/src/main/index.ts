@@ -133,6 +133,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    frame: false,         // 无边框 — 无标题栏、导航栏、窗口装饰
+    fullscreen: true,     // 启动即全屏
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -140,6 +142,18 @@ function createWindow() {
       sandbox: true,
       preload: path.join(__dirname, 'preload.js'),
     },
+  });
+
+  // F11 切换全屏 / Esc 退出全屏
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown') {
+      if (input.key === 'F11') {
+        mainWindow?.setFullScreen(!mainWindow.isFullScreen());
+      }
+      if (input.key === 'Escape' && mainWindow?.isFullScreen()) {
+        mainWindow.setFullScreen(false);
+      }
+    }
   });
 
   // 加载页面：配置 > 环境变量 > 本地
