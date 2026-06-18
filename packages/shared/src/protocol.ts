@@ -161,6 +161,9 @@ export interface ServerScrollMessage {
   requestId: string;
   deltaX: number;
   deltaY: number;
+  /** Cursor position in viewport coords — used to find the scrollable element under the cursor */
+  x?: number;
+  y?: number;
 }
 
 export interface ServerGetDOMMessage {
@@ -246,6 +249,16 @@ export interface ServerGetFieldsMessage {
   requestId: string;
 }
 
+export interface ServerShowCursorMessage {
+  type: 'cmd:showCursor';
+  deviceId: string;
+  requestId: string;
+  /** Viewport x coordinate, or -1 to hide */
+  x: number;
+  /** Viewport y coordinate, or -1 to hide */
+  y: number;
+}
+
 export type ServerDownstreamMessage =
   | ServerStartCaptureMessage
   | ServerStopCaptureMessage
@@ -267,7 +280,8 @@ export type ServerDownstreamMessage =
   | ServerSetStorageMessage
   | ServerClearStorageMessage
   | ServerFillFormMessage
-  | ServerGetFieldsMessage;
+  | ServerGetFieldsMessage
+  | ServerShowCursorMessage;
 
 // ========== Server → Web（广播）==========
 

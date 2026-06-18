@@ -87,6 +87,9 @@ export class CommandExecutor {
         case 'cmd:getFields':
           result = await this.executeGetFields(command);
           break;
+        case 'cmd:showCursor':
+          result = await this.executeShowCursor(command);
+          break;
         default: {
           const unknownCmd = command as ServerDownstreamMessage & { type: string };
           result = { success: false, error: `Unknown command: ${unknownCmd.type}` };
@@ -271,6 +274,37 @@ export class CommandExecutor {
   private async executeScroll(command: Extract<ServerDownstreamMessage, { type: 'cmd:scroll' }>): Promise<CommandResult> {
     const wc = this.win.webContents;
 
+    // If cursor position is known, find the scrollable element under it
+    // and scroll it directly via JS.  Falls back to CDP mouseWheel at (0,0)
+    // when no coordinates are provided.
+    if (command.x !== undefined && command.y !== undefined) {
+      const code = `(() => {
+        const el = document.elementFromPoint(${command.x}, ${command.y});
+        if (!el) { window.scrollBy(${command.deltaX}, ${command.deltaY}); return 'window'; }
+        // Walk up to find the first scrollable ancestor
+        let target = el;
+        while (target && target !== document.documentElement) {
+          const s = window.getComputedStyle(target);
+          const canScrollY = (s.overflowY === 'auto' || s.overflowY === 'scroll') && target.scrollHeight > target.clientHeight;
+          const canScrollX = (s.overflowX === 'auto' || s.overflowX === 'scroll') && target.scrollWidth > target.clientWidth;
+          if (canScrollY || canScrollX) {
+            target.scrollBy(${command.deltaX}, ${command.deltaY});
+            return target.tagName + (target.className ? '.' + target.className.split(' ')[0] : '');
+          }
+          target = target.parentElement;
+        }
+        // No internal scrollable found — scroll the viewport
+        window.scrollBy(${command.deltaX}, ${command.deltaY});
+        return 'window';
+      })()`;
+      const result = await wc.debugger.sendCommand('Runtime.evaluate', { expression: code, returnByValue: true });
+      return {
+        success: true,
+        data: `scrolled ${result.result?.value || 'unknown'}`,
+      };
+    }
+
+    // Legacy fallback
     await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
       type: 'mouseWheel',
       x: 0,
@@ -279,6 +313,31 @@ export class CommandExecutor {
       deltaY: command.deltaY,
     });
 
+    return { success: true };
+  }
+
+  /** Inject / move a visible cursor overlay on the remote page */
+  private async executeShowCursor(command: Extract<ServerDownstreamMessage, { type: 'cmd:showCursor' }>): Promise<CommandResult> {
+    const wc = this.win.webContents;
+
+    // Inject the cursor element once, then just move it
+    const code = command.x < 0 ? `(() => {
+      const el = document.getElementById('__rcursor__');
+      if (el) el.style.display = 'none';
+    })()` : `(() => {
+      let el = document.getElementById('__rcursor__');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = '__rcursor__';
+        el.innerHTML = '<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><path d=\"M4 2l16 14-6 1-4 6-3-2 3-7-6-2z\" fill=\"#ff4444\" stroke=\"#fff\" stroke-width=\"1\"/></svg>';
+        el.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;transition:none;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));';
+        document.body.appendChild(el);
+      }
+      el.style.display = 'block';
+      el.style.left = (${command.x} - 4) + 'px';
+      el.style.top  = (${command.y} - 2) + 'px';
+    })()`;
+    await wc.debugger.sendCommand('Runtime.evaluate', { expression: code });
     return { success: true };
   }
 

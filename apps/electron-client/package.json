@@ -1,6 +1,6 @@
 {
   "name": "@electron-agent/electron-client",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Electron Agent Client — remote-controllable Electron shell for H5 pages",
   "author": "Nous Research",
   "private": true,

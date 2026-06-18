@@ -85,11 +85,17 @@ export class RecordingManager {
     if (!session) return 0;
 
     session.frameCount++;
-    const frameName = `frame_${String(session.frameCount).padStart(5, '0')}.png`;
+    const frameName = `frame_${String(session.frameCount).padStart(5, '0')}.jpg`;
     const framePath = path.join(session.dir, frameName);
 
     try {
-      const buffer = Buffer.from(base64Data, 'base64');
+      // Screenshots come as data:image/jpeg;base64,<data> — strip header if present
+      let raw = base64Data;
+      const commaIdx = raw.indexOf(',');
+      if (commaIdx !== -1 && raw.slice(0, commaIdx).includes('base64')) {
+        raw = raw.slice(commaIdx + 1);
+      }
+      const buffer = Buffer.from(raw, 'base64');
       fs.writeFileSync(framePath, buffer);
     } catch (err) {
       console.error(`[Recording] Failed to write frame:`, err);
@@ -120,13 +126,15 @@ export class RecordingManager {
     }
 
     const outputPath = path.join(session.dir, 'output.mp4');
-    const inputPattern = path.join(session.dir, 'frame_%05d.png');
+    const inputPattern = path.join(session.dir, 'frame_%05d.jpg');
 
     try {
-      // ffmpeg: 2 FPS, H.264, CRF 23 (good quality/size balance)
+      // ffmpeg: 2 FPS, H.264.  pad to even dimensions (H.264 requirement).
+      const vf = 'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos';
       await execFileAsync('ffmpeg', [
         '-framerate', '2',
         '-i', inputPattern,
+        '-vf', vf,
         '-c:v', 'libx264',
         '-crf', '23',
         '-preset', 'fast',

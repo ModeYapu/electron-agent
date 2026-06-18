@@ -55,6 +55,7 @@
           class="screenshot-image"
           @click="handleImageClick"
           @wheel.prevent="handleScroll"
+          @mousemove="handleMouseMove"
         />
         <el-empty v-else description="无截图数据 — 点击「刷新截图」或「开始直播」" />
 
@@ -197,14 +198,14 @@
 
     <el-drawer v-model="logDrawerVisible" title="执行日志" size="360px">
       <div class="log-panel">
-        <div class="log-entry" v-for="(log, index) in logs" :key="index">
+        <div class="log-entry" v-for="(log, index) in wsStore.commandLogs" :key="index">
           <el-tag :type="log.success ? 'success' : 'danger'" size="small">
             {{ log.success ? '成功' : '失败' }}
           </el-tag>
           <span class="log-message">{{ log.message }}</span>
           <span class="log-time">{{ new Date(log.timestamp).toLocaleTimeString() }}</span>
         </div>
-        <el-empty v-if="logs.length === 0" description="暂无日志" />
+        <el-empty v-if="wsStore.commandLogs.length === 0" description="暂无日志" />
       </div>
     </el-drawer>
   </div>
@@ -434,11 +435,24 @@ const handleScroll = (event: WheelEvent) => {
   if (!device.value) return;
   const deltaY = event.deltaY;
   const deltaX = event.deltaX;
+
+  // Compute viewport coordinates for smart internal scroll
+  const target = event.target as HTMLImageElement;
+  const rect = target.getBoundingClientRect();
+  const localX = event.clientX - rect.left;
+  const localY = event.clientY - rect.top;
+  const vpW = wsStore.viewportWidth || target.naturalWidth;
+  const vpH = wsStore.viewportHeight || target.naturalHeight;
+  const x = vpW ? Math.round(localX * (vpW / rect.width)) : undefined;
+  const y = vpH ? Math.round(localY * (vpH / rect.height)) : undefined;
+
   wsStore.send({
     type: 'cmd:scroll',
     requestId: generateRequestId(),
     deltaX: Math.round(deltaX),
     deltaY: Math.round(deltaY),
+    x,
+    y,
   }).then(() => {
     scrollLogPending.value = `△${Math.round(deltaX)},${Math.round(deltaY)}`;
     flushScrollLog();
@@ -457,6 +471,37 @@ const flushScrollLog = () => {
     }
     scrollLogTimer = null;
   }, 500);
+};
+
+// ---- Remote cursor mirroring ----
+let cursorThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+let lastCursorX = 0;
+let lastCursorY = 0;
+
+const handleMouseMove = (event: MouseEvent) => {
+  if (!device.value) return;
+  const target = event.target as HTMLImageElement;
+  const rect = target.getBoundingClientRect();
+  const localX = event.clientX - rect.left;
+  const localY = event.clientY - rect.top;
+  const vpW = wsStore.viewportWidth || target.naturalWidth;
+  const vpH = wsStore.viewportHeight || target.naturalHeight;
+  if (!vpW || !vpH) return;
+  const x = Math.round(localX * (vpW / rect.width));
+  const y = Math.round(localY * (vpH / rect.height));
+  // Dedup — only send if position actually changed
+  if (x === lastCursorX && y === lastCursorY) return;
+  lastCursorX = x;
+  lastCursorY = y;
+  // Throttle: at most one send per 200ms
+  if (cursorThrottleTimer) return;
+  cursorThrottleTimer = setTimeout(() => { cursorThrottleTimer = null; }, 200);
+  wsStore.send({
+    type: 'cmd:showCursor',
+    requestId: generateRequestId(),
+    x,
+    y,
+  }).catch(() => {});
 };
 
 const scheduleScreenshotRefresh = () => {
