@@ -100,6 +100,8 @@ export interface ServerStartCaptureMessage {
   requestId: string;
   fps: number;
   quality: number;
+  /** If true, server will save frames and compile a video on stop */
+  record?: boolean;
 }
 
 export interface ServerStopCaptureMessage {
@@ -293,6 +295,24 @@ export interface ServerScreenshotBroadcast {
   data: ScreenshotData;
 }
 
+/** Sent when recording starts on the relay server */
+export interface ServerRecordingStarted {
+  type: 'server:recordingStarted';
+  deviceId: string;
+  sessionId: string;
+}
+
+/** Sent when recording is compiled and ready for download */
+export interface ServerRecordingComplete {
+  type: 'server:recordingComplete';
+  deviceId: string;
+  sessionId: string;
+  /** URL path to download the mp4, e.g. /api/recordings/<sessionId>/video.mp4 */
+  videoUrl: string;
+  durationMs: number;
+  frameCount: number;
+}
+
 export interface ServerErrorBroadcast {
   type: 'server:error';
   deviceId: string;
@@ -359,6 +379,8 @@ export type ServerBroadcastMessage =
   | ServerDevicesMessage
   | ServerDeviceUpdateMessage
   | ServerScreenshotBroadcast
+  | ServerRecordingStarted
+  | ServerRecordingComplete
   | ServerErrorBroadcast
   | ServerAuditBroadcast
   | ServerCommandError

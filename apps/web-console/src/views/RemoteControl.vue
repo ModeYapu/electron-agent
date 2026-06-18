@@ -285,12 +285,13 @@ const startStreaming = () => {
   streaming.value = true;
   addLog(true, '开始实时截图直播 (2 FPS)');
 
-  // Request continuous capture at 2 FPS
+  // Request continuous capture at 2 FPS, with server-side recording
   wsStore.send({
     type: 'cmd:startCapture',
     requestId: generateRequestId(),
     fps: 2,
     quality: 50,
+    record: true,   // Enable server-side ffmpeg recording
   }).catch(err => addLog(false, `Start capture failed: ${err}`));
 
   // Also poll screenshots every 500ms as backup

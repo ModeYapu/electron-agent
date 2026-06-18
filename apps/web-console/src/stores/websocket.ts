@@ -72,6 +72,15 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const pendingRequests = ref<Map<string, PendingRequest>>(new Map());
   const commandLogs = ref<Array<{ success: boolean; message: string; timestamp: number }>>([]);
 
+  // Recording status (local state, updated by server:recordingStarted/Complete)
+  const recordingStatus = ref<{
+    sessionId?: string;
+    recording?: boolean;
+    videoUrl?: string;
+    durationMs?: number;
+    frameCount?: number;
+  }>({});
+
   // ========== Auth ==========
 
   // P2 CONFIG CLEANUP: real login flow. POST /api/login → JWT, persisted in
@@ -354,6 +363,26 @@ export const useWebSocketStore = defineStore('websocket', () => {
         }
         break;
 
+      case 'server:recordingStarted':
+        recordingStatus.value = { sessionId: message.sessionId, recording: true };
+        addCommandLog(true, `🔴 录制已开始 — 会话: ${message.sessionId.slice(-12)}`);
+        break;
+
+      case 'server:recordingComplete':
+        recordingStatus.value = {
+          sessionId: message.sessionId,
+          recording: false,
+          videoUrl: message.videoUrl,
+          durationMs: message.durationMs,
+          frameCount: message.frameCount,
+        };
+        addCommandLog(true,
+          `✅ 录制完成 — ${message.frameCount} 帧, ` +
+          `${(message.durationMs / 1000).toFixed(1)}s, ` +
+          `下载: ${message.videoUrl}`
+        );
+        break;
+
       case 'server:networkBatch': {
         const ts = Date.now();
         const additions = message.batch.map(req => ({ deviceId: message.deviceId, request: req, timestamp: ts }));
@@ -477,6 +506,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
     storage,
     domSnapshot,
     commandLogs,
+    recordingStatus,
     // device-scoped selectors
     networkLogsFor,
     consoleLogsFor,

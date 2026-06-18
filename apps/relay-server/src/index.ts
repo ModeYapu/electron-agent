@@ -18,6 +18,8 @@ import { AuditStore } from './audit-store';
 import { NetworkStore } from './network-store';
 import { ConsoleStore } from './console-store';
 import { ErrorStore } from './error-store';
+import { RecordingManager } from './recording-manager';
+import path from 'path';
 
 // ========== 配置 ==========
 const PORT = process.env.PORT || 9300;
@@ -61,6 +63,9 @@ const auditStore = new AuditStore();
 const networkStore = new NetworkStore();
 const consoleStore = new ConsoleStore();
 const errorStore = new ErrorStore();
+const recordingManager = new RecordingManager(
+  path.join(__dirname, '..', 'recordings')
+);
 
 // ========== P1 DEVICE STATE SYNC ==========
 // Registry is event-driven: broadcast device changes to every web client so a
@@ -237,6 +242,34 @@ app.get('/api/errors', (req, res) => {
   res.json({ errors, total: allErrors.length });
 });
 
+// ========== Recording Endpoints ==========
+
+/** List completed recordings */
+app.get('/api/recordings', (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token || !authService.verifyWebRequest(token)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const list = recordingManager.listCompleted();
+  res.json({ recordings: list.map(r => ({
+    sessionId: r.sessionId,
+    deviceId: r.deviceId,
+    videoUrl: r.videoUrl,
+    durationMs: r.durationMs,
+    frameCount: r.frameCount,
+    fileSizeBytes: r.fileSizeBytes,
+  }))});
+});
+
+/** Serve recording video file */
+app.get('/api/recordings/:sessionId/video.mp4', (req, res) => {
+  const result = recordingManager.getResult(req.params.sessionId);
+  if (!result) {
+    return res.status(404).json({ error: 'Recording not found' });
+  }
+  res.sendFile(result.videoPath);
+});
+
 // ========== WebSocket 服务器 ==========
 const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -367,8 +400,34 @@ function handleWebConnection(ws: WebSocket, role: 'admin' | 'viewer'): void {
         return;
       }
 
+      // --- Recording intercept ---
+      const deviceId = message.deviceId || '';
+      if (message.type === 'cmd:startCapture' && (message as any).record) {
+        const session = recordingManager.startSession(deviceId);
+        commandBus.broadcastToWeb({
+          type: 'server:recordingStarted',
+          deviceId,
+          sessionId: session.sessionId,
+        } as ServerBroadcastMessage);
+      }
+
       // Forward to the corresponding Agent
-      const success = commandBus.forwardToAgent(message.deviceId || '', message, ws);
+      const success = commandBus.forwardToAgent(deviceId, message, ws);
+
+      if (message.type === 'cmd:stopCapture') {
+        recordingManager.stopSession(deviceId).then(result => {
+          if (result) {
+            commandBus.broadcastToWeb({
+              type: 'server:recordingComplete',
+              deviceId,
+              sessionId: result.sessionId,
+              videoUrl: result.videoUrl,
+              durationMs: result.durationMs,
+              frameCount: result.frameCount,
+            } as ServerBroadcastMessage);
+          }
+        }).catch(err => console.error('[Recording] stopSession error:', err));
+      }
 
       if (!success) {
         console.warn(`Agent not connected: ${message.deviceId}`);
@@ -413,6 +472,10 @@ function handleAgentMessage(message: AgentUpstreamMessage, ws: WebSocket): void 
       break;
 
     case 'agent:screenshot':
+      // Save frame if recording for this device
+      if (message.data?.data) {
+        recordingManager.saveFrame(message.deviceId, message.data.data);
+      }
       // P0 PROTOCOL: Re-wrap agent:* as server:* before broadcasting
       commandBus.broadcastToWeb({
         type: 'server:screenshot',
