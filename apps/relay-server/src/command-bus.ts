@@ -23,12 +23,21 @@ interface PendingRequest {
   timestamp: number;
 }
 
+// LIFO screenshot slot — per web client, only the latest frame matters
+interface ScreenshotSlot {
+  data: string;
+  version: number;
+  sending: boolean;
+  sentVersion: number;
+}
+
 const DEFAULT_REQUEST_TIMEOUT = 10000; // 10 seconds
 
 export class CommandBus extends EventEmitter {
   private agentConnections: Map<string, WebSocket> = new Map();
   private webConnections: Set<WebConnection> = new Set();
   private pendingRequests: Map<string, PendingRequest> = new Map();
+  private screenshotSlots: Map<WebSocket, ScreenshotSlot> = new Map();
 
   constructor(private requestTimeoutMs: number = DEFAULT_REQUEST_TIMEOUT) {
     super();
@@ -58,6 +67,8 @@ export class CommandBus extends EventEmitter {
           break;
         }
       }
+      // Clean up LIFO screenshot slot
+      this.screenshotSlots.delete(ws);
     });
   }
 
@@ -163,6 +174,30 @@ export class CommandBus extends EventEmitter {
 
   broadcastToWeb(message: ServerBroadcastMessage): void {
     const data = JSON.stringify(message);
+
+    // LIFO for screenshots: only the latest frame matters, drop old queued frames
+    if (message.type === 'server:screenshot') {
+      for (const conn of this.webConnections) {
+        if (conn.ws.readyState !== WebSocket.OPEN) continue;
+
+        let slot = this.screenshotSlots.get(conn.ws);
+        if (!slot) {
+          slot = { data, version: 0, sending: false, sentVersion: -1 };
+          this.screenshotSlots.set(conn.ws, slot);
+        }
+        // Replace stale frame with latest
+        slot.data = data;
+        slot.version++;
+
+        if (!slot.sending) {
+          this._flushScreenshotLIFO(conn.ws, slot);
+        }
+        // else: frame replaced in-place, will be sent when current send completes
+      }
+      return;
+    }
+
+    // Non-screenshot: normal broadcast
     for (const conn of this.webConnections) {
       if (conn.ws.readyState === WebSocket.OPEN) {
         try {
@@ -172,6 +207,32 @@ export class CommandBus extends EventEmitter {
         }
       }
     }
+  }
+
+  // LIFO flush: send latest screenshot, re-check on callback for newer frames
+  private _flushScreenshotLIFO(ws: WebSocket, slot: ScreenshotSlot): void {
+    if (slot.version <= slot.sentVersion) {
+      slot.sending = false;
+      return; // nothing new
+    }
+    slot.sending = true;
+    const versionToSend = slot.version;
+    const dataToSend = slot.data;
+    slot.sentVersion = versionToSend;
+
+    ws.send(dataToSend, (err) => {
+      if (err) {
+        console.error('[LIFO] screenshot send error:', err.message);
+        slot.sending = false;
+        return;
+      }
+      // New frame arrived while we were sending? Send it now.
+      if (slot.version > versionToSend) {
+        setImmediate(() => this._flushScreenshotLIFO(ws, slot));
+      } else {
+        slot.sending = false;
+      }
+    });
   }
 
   // Send to a specific web connection
