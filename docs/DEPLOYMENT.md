@@ -1,239 +1,246 @@
-# Electron Agent 部署指南
+# Electron Agent Console — 部署文档
 
-生产环境部署的完整指南，包括 Docker 部署、Nginx 反向代理配置、TLS 设置等。
+## 一、系统架构
 
-## 📋 目录
-
-- [Docker 部署](#docker-部署)
-- [手动部署](#手动-部署)
-- [Nginx 反向代理](#nginx-反向代理)
-- [TLS 配置](#tls-配置)
-- [环境变量配置](#环境变量配置)
-- [安全检查清单](#安全检查清单)
-- [监控与维护](#监控与维护)
-
-## 🐳 Docker 部署
-
-### 前置要求
-
-- Docker 20.10+
-- Docker Compose 2.0+
-- 至少 2GB 可用内存
-- 至少 10GB 可用磁盘空间
-
-### 快速部署
-
-1. **准备配置文件**
-```bash
-# 复制环境变量模板
-cp .env.example .env
-
-# 编辑配置文件
-nano .env
+```
+                    ┌──────────────────────────────────────┐
+                    │          Nginx (HTTPS 反代)           │
+                    │  /          → web-console 静态文件     │
+                    │  /api/*     → relay-server :9300      │
+                    │  /ws        → relay-server :9300 (WS) │
+                    └────┬──────────────┬───────────────────┘
+                         │              │
+              ┌──────────▼──┐   ┌──────▼──────────────┐
+              │ web-console │   │   relay-server      │
+              │ (Vue3 SPA)  │   │   Node.js :9300     │
+              │ 静态文件     │   │   HTTP + WebSocket  │
+              └─────────────┘   │   + ffmpeg 录屏     │
+                                └──────┬──────────────┘
+                                       │ WebSocket
+                          ┌────────────┼────────────┐
+                          ▼            ▼            ▼
+                    ┌──────────┐ ┌──────────┐ ┌──────────┐
+                    │ Electron │ │ Electron │ │ Electron │
+                    │ Client 1 │ │ Client 2 │ │ Client N │
+                    │ (被控端)  │ │          │ │          │
+                    └──────────┘ └──────────┘ └──────────┘
 ```
 
-2. **设置关键变量**
-```bash
-# 生成安全的 JWT_SECRET
-JWT_SECRET=$(openssl rand -base64 32)
-echo "JWT_SECRET=$JWT_SECRET" >> .env
+### 组件说明
 
-# 设置管理员密码
-ADMIN_PASSWORD=$(openssl rand -base64 16)
-echo "ADMIN_PASSWORD=$ADMIN_PASSWORD" >> .env
-```
+| 组件 | 技术栈 | 端口 | 说明 |
+|------|--------|------|------|
+| **relay-server** | Node.js + Express + ws | 9300 | 中继服务器：设备注册、命令转发、认证、录屏管理 |
+| **web-console** | Vue 3 + Vite + Element Plus | 静态 | 管理端 SPA：设备列表、远程操控、审计日志、录屏回放 |
+| **electron-client** | Electron + CDP | 桌面应用 | 被控端：加载 H5 页面，通过 WebSocket 接收指令并执行 |
+| **shared** | TypeScript 库 | - | 协议定义（命令/消息类型、设备信息结构） |
+| **agent-core** | TypeScript 库 | - | Agent 核心：CDP 指令执行器、设备指纹、权限管理 |
 
-3. **构建并启动服务**
-```bash
-# 构建镜像
-docker-compose build
+---
 
-# 启动服务
-docker-compose up -d
+## 二、服务器资源要求
 
-# 查看日志
-docker-compose logs -f
-```
+### 2.1 最低配置
 
-4. **验证部署**
-```bash
-# 检查服务状态
-docker-compose ps
+| 资源 | 最低 | 推荐 |
+|------|------|------|
+| **CPU** | 2 核 | 4 核+ |
+| **内存** | 2 GB | 4 GB+ |
+| **磁盘** | 20 GB | 50 GB+ (录屏文件会增长) |
+| **操作系统** | Linux (Ubuntu 20.04+ / Debian 11+) 或 Windows Server 2019+ |
+| **网络** | 固定 IP 或域名，管理端和 Agent 均需可达 |
 
-# 检查健康状态
-curl http://localhost:9300/health
-curl http://localhost/health
-```
+### 2.2 录屏存储估算
 
-### 高级配置
+| 分辨率 | 帧率 | 时长 | 单帧大小(JPEG) | 总大小(估算) |
+|--------|------|------|---------------|-------------|
+| 1920×1080 | 2 fps | 10 分钟 | ~100 KB | ~120 MB |
+| 1920×1080 | 2 fps | 1 小时 | ~100 KB | ~720 MB |
 
-#### 自定义网络
-```yaml
-# docker-compose.override.yml
-version: '3.8'
+录屏完成后 ffmpeg 编译为 H.264 MP4（压缩比约 15-30:1），10 分钟录屏最终约 5-8 MB。
 
-services:
-  relay-server:
-    networks:
-      - electron-agent-network
-      - custom-network
+---
 
-networks:
-  custom-network:
-    external: true
-```
+## 三、依赖项
 
-#### 资源限制
-```yaml
-services:
-  relay-server:
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 1G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
-```
+### 3.1 系统依赖
 
-#### 日志配置
-```yaml
-services:
-  relay-server:
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-```
+| 依赖 | 版本要求 | 用途 | 安装方式 |
+|------|---------|------|---------|
+| **Node.js** | ≥ 22.0.0 | 运行时 | 见下方 |
+| **npm** | ≥ 10.x | 包管理 | 随 Node.js |
+| **ffmpeg** | ≥ 4.x | 录屏视频合成 (H.264 编码) | `apt install ffmpeg` |
+| **nginx** | ≥ 1.18 | 反向代理 + 静态文件 | `apt install nginx` |
+| **git** | ≥ 2.x | 源码克隆 | `apt install git` |
 
-### 容器管理
+#### 安装 Node.js 22+ (Ubuntu/Debian)
 
 ```bash
-# 查看日志
-docker-compose logs relay-server
-docker-compose logs web-console
+# 使用 NodeSource 官方源
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
 
-# 重启服务
-docker-compose restart relay-server
-
-# 更新服务
-docker-compose pull
-docker-compose up -d
-
-# 停止服务
-docker-compose down
-
-# 清理数据
-docker-compose down -v
+# 验证
+node --version   # ≥ v22.0.0
+npm --version    # ≥ 10.x
 ```
 
-## 🔧 手动部署
+#### 安装 ffmpeg
 
-### 系统要求
-
-- Node.js 22+
-- npm 10+
-- 2GB+ RAM
-- 10GB+ 磁盘空间
-
-### 1. 安装系统依赖
-
-#### Ubuntu/Debian
 ```bash
-sudo apt update
-sudo apt install -y nodejs npm nginx
+sudo apt-get update
+sudo apt-get install -y ffmpeg
+
+# 验证
+ffmpeg -version | head -1   # ≥ 4.x
 ```
 
-#### CentOS/RHEL
+**注意**：ffmpeg 必须是系统级的可执行文件（在 `$PATH` 中），relay-server 通过 `child_process.execFile('ffmpeg', [...])` 调用。某些精简版 Linux 发行版可能需要启用额外软件源才能获取（如 EPEL）。确认支持 `libx264` 编码器：
+
 ```bash
-sudo yum install -y nodejs npm nginx
+ffmpeg -encoders 2>/dev/null | grep libx264
+# 期望输出: V..... libx264  libx264 H.264 / AVC / MPEG-4 AVC ...
 ```
 
-#### macOS
+### 3.2 npm 依赖（自动安装）
+
+项目通过 monorepo 管理，`npm install` 时自动安装所有子包的依赖：
+
+**relay-server 核心依赖**:
+- `express` 4.x — HTTP 框架
+- `ws` 8.x — WebSocket 服务端
+- `jsonwebtoken` 9.x — JWT 认证
+- `cors` 2.x — 跨域支持
+- `express-rate-limit` 7.x — 登录频率限制
+- `dotenv` 17.x — 环境变量加载
+
+**构建工具**:
+- `typescript` 5.9.x
+- `tsx` 4.x — 开发模式运行（`tsx watch`）
+
+---
+
+## 四、部署步骤
+
+### 4.1 克隆项目
+
 ```bash
-brew install node npm nginx
+git clone <repo-url> /opt/electron-agent
+cd /opt/electron-agent
 ```
 
-### 2. 部署 Relay Server
+### 4.2 安装依赖并构建
 
 ```bash
-# 克隆项目
-git clone <repository-url>
-cd electron-agent
-
-# 安装依赖
+# 安装所有依赖 (monorepo)
 npm install
 
-# 构建项目
+# 全量构建 (按依赖顺序: shared → agent-core → relay-server → web-console)
 npm run build
-
-# 配置环境变量
-cp .env.example .env
-nano .env
-
-# 启动服务
-cd apps/relay-server
-npm run build
-NODE_ENV=production PORT=9300 npm start
 ```
 
-### 3. 部署 Web Console
+> **构建顺序**：shared（协议库）→ agent-core（执行器）→ relay-server（服务端）→ web-console（前端 SPA）。
+> `npm run build` 已配置为按 workspace 顺序构建。
+
+#### 各子包构建产物
+
+| 子包 | 构建命令 | 产物 |
+|------|---------|------|
+| `packages/shared` | `tsc` | `dist/` (JS + .d.ts) |
+| `packages/agent-core` | `tsc` | `dist/` (JS + .d.ts) |
+| `apps/relay-server` | `tsc` | `dist/` (Node.js 可执行) |
+| `apps/web-console` | `vite build` | `dist/` (静态 HTML/JS/CSS) |
+| `apps/electron-client` | `tsc + electron-builder` | `build/*.exe` (仅 Windows 需要) |
+
+> **注意**：`electron-client` 只在需要构建被控端安装包时编译，服务器部署**不需要**构建 electron-client。
+
+### 4.3 配置 relay-server
+
+创建环境变量文件：
 
 ```bash
-# 构建静态文件
-cd apps/web-console
-npm run build
+# 创建 .env 文件
+cat > apps/relay-server/.env << 'EOF'
+# ========== 必需配置 ==========
+NODE_ENV=production
+PORT=9300
 
-# 复制到 Nginx 目录
-sudo cp -r dist /usr/share/nginx/html/electron-agent
+# ========== 认证凭据 (生产环境必须设置，否则启动失败) ==========
+# Agent 连接令牌 — Electron Client 与此 token 匹配才能连接
+AGENT_TOKEN=your-agent-token-here-change-me
 
-# 配置 Nginx (见下一节)
-```
+# 管理后台用户名
+ADMIN_USERNAME=admin
 
-### 4. 使用 PM2 管理进程
+# 管理后台密码 — 登录 web-console 使用
+ADMIN_PASSWORD=your-admin-password-change-me
 
-```bash
-# 安装 PM2
-npm install -g pm2
+# 管理员 API Token — 备用认证方式
+ADMIN_TOKEN=your-admin-token-change-me
 
-# 创建进程配置
-cat > ecosystem.config.js << EOF
-module.exports = {
-  apps: [{
-    name: 'electron-agent-relay',
-    script: 'apps/relay-server/dist/index.js',
-    instances: 2,
-    exec_mode: 'cluster',
-    env: {
-      NODE_ENV: 'production',
-      PORT: 9300
-    },
-    error_file: '/var/log/electron-agent/error.log',
-    out_file: '/var/log/electron-agent/out.log',
-    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-    merge_logs: true,
-    autorestart: true,
-    max_restarts: 10,
-    min_uptime: '10s'
-  }]
-};
+# JWT 签名密钥 — 用于生成和验证登录 token
+JWT_SECRET=your-jwt-secret-change-me-min-32-chars
 EOF
-
-# 启动服务
-pm2 start ecosystem.config.js
-
-# 保存进程列表
-pm2 save
-
-# 设置开机自启
-pm2 startup
 ```
 
-## 🌐 Nginx 反向代理
+**⚠️ 生产环境安全要求**：
+- **必须**设置所有 5 个凭据变量（`AGENT_TOKEN`、`ADMIN_PASSWORD`、`ADMIN_TOKEN`、`JWT_SECRET`）
+- 所有凭据使用 `openssl rand -hex 32` 生成强随机值
+- `.env` 文件权限设为 `600`（`chmod 600 apps/relay-server/.env`）
+- 切勿将 `.env` 提交到版本控制
 
-### 基础配置
+### 4.4 配置 web-console 生产环境变量
+
+```bash
+cat > apps/web-console/.env.production << 'EOF'
+# 生产环境：API 和 WebSocket 地址
+# 当 web-console 和 relay-server 同机部署时使用 localhost
+# 分离部署时改为 relay-server 所在服务器的 IP/域名
+VITE_API_URL=http://localhost:9300
+VITE_WS_URL=ws://localhost:9300/ws
+EOF
+```
+
+> **注意**：这两个变量在 `vite build` 时编译进 JS 产物，而非运行时读取。
+> 如果 relay-server 在不同服务器上，修改这里的地址后**必须重新构建 web-console**。
+
+### 4.5 配置 Electron Client（被控端）
+
+在 `apps/electron-client/config.default.json` 中配置：
+
+```json
+{
+  "serverUrl": "ws://<relay-server-ip>:9300/ws",
+  "agentToken": "your-agent-token-here-change-me",
+  "h5Url": "https://your-h5-app.example.com/#/index"
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `serverUrl` | relay-server 的 WebSocket 地址，Agent 启动后连接此地址 |
+| `agentToken` | 必须与 relay-server `.env` 中的 `AGENT_TOKEN` 一致 |
+| `h5Url` | Electron 客户端加载的远程 H5 页面 URL |
+
+构建 Electron 客户端安装包：
+
+```bash
+# Windows
+cd apps/electron-client
+npx electron-builder --win
+
+# macOS
+npx electron-builder --mac
+
+# Linux
+npx electron-builder --linux
+```
+
+---
+
+## 五、Nginx 配置
+
+### 5.1 完整配置示例
 
 ```nginx
 # /etc/nginx/sites-available/electron-agent
@@ -241,33 +248,53 @@ server {
     listen 80;
     server_name your-domain.com;
 
-    # 重定向到 HTTPS
-    return 301 https://$server_name$request_uri;
+    # 强制 HTTPS (推荐)
+    return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl http2;
     server_name your-domain.com;
 
-    # SSL 证书配置 (见 TLS 配置)
-    ssl_certificate /etc/ssl/certs/electron-agent.crt;
-    ssl_certificate_key /etc/ssl/private/electron-agent.key;
+    # ========== SSL 证书 ==========
+    ssl_certificate     /etc/nginx/ssl/your-domain.crt;
+    ssl_certificate_key /etc/nginx/ssl/your-domain.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
 
-    # 安全头部
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
+    # ========== 日志 ==========
+    access_log /var/log/nginx/electron-agent.access.log;
+    error_log  /var/log/nginx/electron-agent.error.log;
 
-    # 静态文件
+    # ========== 客户端最大请求体 ==========
+    client_max_body_size 100M;
+
+    # ========== web-console 静态文件 ==========
+    root /opt/electron-agent/apps/web-console/dist;
+    index index.html;
+
+    # SPA fallback: 所有非文件路径返回 index.html
     location / {
-        root /usr/share/nginx/html/electron-agent;
         try_files $uri $uri/ /index.html;
     }
 
-    # WebSocket 代理
+    # ========== API 代理到 relay-server ==========
+    location /api/ {
+        proxy_pass http://127.0.0.1:9300;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # 录屏视频下载可能较大，关闭缓冲
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+
+    # ========== WebSocket 代理到 relay-server ==========
     location /ws {
-        proxy_pass http://localhost:9300;
+        proxy_pass http://127.0.0.1:9300;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -275,338 +302,290 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
-        # WebSocket 超时设置
+
+        # WebSocket 超时：1 小时无活动断开
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
-        proxy_connect_timeout 60s;
     }
 
-    # API 代理
+    # ========== 健康检查端点 (无需认证) ==========
+    location /health {
+        proxy_pass http://127.0.0.1:9300;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    # ========== 安全加固 ==========
+    # 隐藏 Nginx 版本
+    server_tokens off;
+
+    # 安全头
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+}
+```
+
+### 5.2 启用站点
+
+```bash
+sudo ln -s /etc/nginx/sites-available/electron-agent /etc/nginx/sites-enabled/
+sudo nginx -t          # 测试配置
+sudo systemctl reload nginx
+```
+
+### 5.3 仅内网部署（无 SSL）
+
+如果仅在内网使用，可以只用 HTTP：
+
+```nginx
+server {
+    listen 80;
+    server_name _;
+
+    root /opt/electron-agent/apps/web-console/dist;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
     location /api/ {
-        proxy_pass http://localhost:9300/api/;
+        proxy_pass http://127.0.0.1:9300;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
     }
 
-    # 健康检查
-    location /health {
-        access_log off;
-        return 200 "OK";
-        add_header Content-Type text/plain;
+    location /ws {
+        proxy_pass http://127.0.0.1:9300;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 }
 ```
 
-### 启用配置
+---
+
+## 六、进程管理
+
+### 6.1 systemd 服务 (推荐)
+
+创建 systemd service 文件：
 
 ```bash
-# 创建符号链接
-sudo ln -s /etc/nginx/sites-available/electron-agent /etc/nginx/sites-enabled/
+sudo cat > /etc/systemd/system/electron-agent-relay.service << 'EOF'
+[Unit]
+Description=Electron Agent Relay Server
+After=network.target
 
-# 测试配置
-sudo nginx -t
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/electron-agent/apps/relay-server
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
 
-# 重载 Nginx
-sudo systemctl reload nginx
+# 安全加固
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/electron-agent/apps/relay-server/recordings
+
+[Install]
+WantedBy=multi-user.target
+EOF
 ```
 
-## 🔒 TLS 配置
-
-### 使用 Let's Encrypt
+启动服务：
 
 ```bash
-# 安装 Certbot
-sudo apt install certbot python3-certbot-nginx
-
-# 获取证书
-sudo certbot --nginx -d your-domain.com
-
-# 自动续期
-sudo certbot renew --dry-run
+sudo systemctl daemon-reload
+sudo systemctl enable electron-agent-relay
+sudo systemctl start electron-agent-relay
+sudo systemctl status electron-agent-relay
 ```
 
-### 使用自签名证书 (开发环境)
+### 6.2 查看日志
 
 ```bash
-# 创建证书目录
-sudo mkdir -p /etc/ssl/private
+# systemd 日志
+sudo journalctl -u electron-agent-relay -f
 
-# 生成私钥
-sudo openssl genrsa -out /etc/ssl/private/electron-agent.key 2048
-
-# 生成证书
-sudo openssl req -new -x509 -key /etc/ssl/private/electron-agent.key \
-  -out /etc/ssl/certs/electron-agent.crt -days 365 \
-  -subj "/C=US/ST=State/L=City/O=Organization/CN=your-domain.com"
+# 应用日志（nginx）
+sudo tail -f /var/log/nginx/electron-agent.access.log
+sudo tail -f /var/log/nginx/electron-agent.error.log
 ```
 
-### SSL 最佳实践
-
-```nginx
-# 强 SSL 配置
-ssl_protocols TLSv1.2 TLSv1.3;
-ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
-ssl_prefer_server_ciphers on;
-
-# 会话缓存
-ssl_session_cache shared:SSL:10m;
-ssl_session_timeout 10m;
-
-# OCSP Stapling
-ssl_stapling on;
-ssl_stapling_verify on;
-ssl_trusted_certificate /etc/ssl/certs/chain.crt;
-```
-
-## ⚙️ 环境变量配置
-
-### 生产环境配置
+### 6.3 PM2 进程管理 (备选)
 
 ```bash
-# /etc/electron-agent/env
-# 服务器配置
-PORT=9300
-NODE_ENV=production
+npm install -g pm2
 
-# JWT 认证
-JWT_SECRET=your-production-jwt-secret-at-least-32-characters-long
+# 启动
+pm2 start apps/relay-server/dist/index.js \
+    --name electron-agent-relay \
+    --cwd apps/relay-server
 
-# 管理员凭证
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=your-secure-admin-password
+# 开机自启
+pm2 save
+pm2 startup
 
-# 遗留令牌 (迁移期使用)
-AGENT_TOKEN=dev-agent-token-123
-ADMIN_TOKEN=dev-admin-token-456
-
-# 性能优化
-ADAPTIVE_QUALITY=true
-INITIAL_QUALITY=70
-ADAPTIVE_FPS=true
-BATCH_INTERVAL=500
-
-# 隐私保护
-MASK_ENABLED=false
-MASK_BLUR_RADIUS=10
-
-# 速率限制
-LOGIN_RATE_LIMIT=5
-COMMAND_RATE_LIMIT=10
-
-# 日志配置
-LOG_LEVEL=info
-AUDIT_LOGGING=true
-
-# 网络配置
-WEBSOCKET_TIMEOUT=3600
-MAX_CONNECTIONS=100
+# 查看状态
+pm2 status
+pm2 logs electron-agent-relay
 ```
 
-### 配置文件权限
+---
+
+## 七、录屏数据管理
+
+### 7.1 目录结构
+
+```
+apps/relay-server/recordings/
+├── <deviceId>_<timestamp>/
+│   ├── frame_00001.jpg
+│   ├── frame_00002.jpg
+│   └── output.mp4
+└── <deviceId>_<timestamp>/
+    └── ...
+```
+
+### 7.2 自动清理 (cron)
+
+录屏帧文件（JPEG）在 ffmpeg 编译完成后不会自动删除，建议配置定时清理：
 
 ```bash
-# 设置适当的权限
-sudo chmod 600 /etc/electron-agent/env
-sudo chown root:root /etc/electron-agent/env
-```
-
-## 🔐 安全检查清单
-
-### 部署前检查
-
-- [ ] 修改默认管理员密码
-- [ ] 设置强 JWT_SECRET (至少 32 字符)
-- [ ] 启用 HTTPS/TLS
-- [ ] 配置防火墙规则
-- [ ] 启用审计日志
-- [ ] 配置日志轮转
-- [ ] 设置监控告警
-- [ ] 定期备份数据
-
-### 网络安全
-
-```bash
-# 防火墙配置 (UFW)
-sudo ufw allow 22/tcp    # SSH
-sudo ufw allow 80/tcp    # HTTP
-sudo ufw allow 443/tcp   # HTTPS
-sudo ufw enable
-
-# 限制内部端口访问
-sudo ufw deny 9300/tcp  # 仅允许本地访问
-```
-
-### 应用安全
-
-- [ ] 启用速率限制
-- [ ] 配置 CORS 策略
-- [ ] 实施访问控制
-- [ ] 启用隐私遮罩
-- [ ] 加密敏感数据
-
-### 数据保护
-
-```bash
-# 设置日志轮转
-sudo nano /etc/logrotate.d/electron-agent
-
-/var/log/electron-agent/*.log {
-    daily
-    rotate 30
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 www-data www-data
-    sharedscripts
-    postrotate
-        systemctl reload electron-agent > /dev/null 2>&1 || true
-    endscript
-}
-```
-
-## 📊 监控与维护
-
-### 系统监控
-
-#### Prometheus 配置
-```yaml
-# prometheus.yml
-scrape_configs:
-  - job_name: 'electron-agent'
-    static_configs:
-      - targets: ['localhost:9300']
-    metrics_path: '/metrics'
-```
-
-#### Grafana 仪表板
-- 服务可用性
-- 响应时间
-- 错误率
-- 资源使用率
-
-### 日志监控
-
-```bash
-# 实时查看日志
-sudo journalctl -u electron-agent -f
-
-# 查看错误日志
-tail -f /var/log/electron-agent/error.log
-
-# 搜索特定事件
-grep "ERROR" /var/log/electron-agent/out.log
-```
-
-### 健康检查
-
-```bash
-# 创建健康检查脚本
-cat > /usr/local/bin/electron-agent-health.sh << 'EOF'
+# 每天凌晨 3 点清理 7 天前的录屏目录
+cat > /etc/cron.daily/cleanup-recordings << 'EOF'
 #!/bin/bash
-curl -f http://localhost:9300/health || exit 1
-curl -f http://localhost/health || exit 1
-echo "All services healthy"
+RECORDINGS_DIR=/opt/electron-agent/apps/relay-server/recordings
+find "$RECORDINGS_DIR" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} \;
 EOF
 
-chmod +x /usr/local/bin/electron-agent-health.sh
-
-# 添加到 crontab
-crontab -e
-# 添加: */5 * * * * /usr/local/bin/electron-agent-health.sh
+chmod +x /etc/cron.daily/cleanup-recordings
 ```
 
-### 备份策略
+### 7.3 磁盘监控
+
+建议配置磁盘使用率告警：
 
 ```bash
-# 数据库备份脚本
-cat > /usr/local/bin/electron-agent-backup.sh << 'EOF'
-#!/bin/bash
-BACKUP_DIR="/var/backups/electron-agent"
-DATE=$(date +%Y%m%d_%H%M%S)
-
-mkdir -p $BACKUP_DIR
-
-# 备份配置文件
-cp /etc/electron-agent/env $BACKUP_DIR/env_$DATE
-
-# 备份日志
-tar -czf $BACKUP_DIR/logs_$DATE.tar.gz /var/log/electron-agent/
-
-# 清理 30 天前的备份
-find $BACKUP_DIR -name "*.tar.gz" -mtime +30 -delete
-find $BACKUP_DIR -name "env_*" -mtime +30 -delete
-EOF
-
-chmod +x /usr/local/bin/electron-agent-backup.sh
-
-# 添加到 crontab (每天凌晨 2 点)
-crontab -e
-# 添加: 0 2 * * * /usr/local/bin/electron-agent-backup.sh
+# 录屏目录超过 80% 磁盘使用率时告警
+df -h /opt/electron-agent/apps/relay-server/recordings | \
+    awk 'NR==2 {gsub(/%/,""); if($5>80) print "WARNING: recording disk usage at " $5 "%"}'
 ```
 
-### 故障恢复
+---
+
+## 八、验证部署
+
+### 8.1 健康检查
 
 ```bash
-# 服务重启
-pm2 restart electron-agent-relay
-sudo systemctl restart nginx
+# relay-server
+curl http://localhost:9300/health
+# 期望: {"status":"ok","uptime":...}
 
-# 完整重启
-docker-compose restart
-
-# 紧急回滚
-docker-compose down
-docker-compose up -d --scale relay-server=1
-
-# 查看详细日志
-docker-compose logs --tail=500 relay-server
+# 通过 nginx
+curl https://your-domain.com/health
+# 期望: {"status":"ok","uptime":...}
 ```
 
-## 🚨 故障排除
-
-### 常见问题
-
-1. **WebSocket 连接失败**
-   - 检查防火墙规则
-   - 验证 Nginx 代理配置
-   - 检查 SSL 证书有效性
-
-2. **高内存使用**
-   - 调整批处理间隔
-   - 降低 JPEG 质量
-   - 限制并发连接数
-
-3. **认证失败**
-   - 验证 JWT_SECRET 配置
-   - 检查令牌过期时间
-   - 查看审计日志
-
-### 调试模式
+### 8.2 登录测试
 
 ```bash
-# 启用调试日志
-LOG_LEVEL=debug npm start
-
-# WebSocket 调试
-wscat -c "ws://localhost:9300/ws?token=dev-admin-token-456"
-
-# API 测试
-curl -X POST http://localhost:9300/api/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}'
+curl -X POST https://your-domain.com/api/login \
+    -H "Content-Type: application/json" \
+    -d '{"username":"admin","password":"your-admin-password"}'
+# 期望: {"token":"eyJhbG...","expiresIn":...}
 ```
 
-## 📞 获取帮助
+### 8.3 WebSocket 测试
 
-- 查看项目文档: [README.md](../README.md)
-- 提交问题: GitHub Issues
-- 技术支持: admin@example.com
+```bash
+# 安装 wscat
+npm install -g wscat
+
+# 连接测试 (使用 ADMIN_TOKEN)
+wscat -c "wss://your-domain.com/ws?token=your-admin-token"
+# 连接成功后会收到: {"type":"server:connected","role":"admin",...}
+```
+
+### 8.4 管理端访问
+
+浏览器打开 `https://your-domain.com`：
+1. 使用 `admin` / `your-admin-password` 登录
+2. 确认能看到"设备列表"页面（即使无设备在线也应显示空列表）
+3. 在 Electron Client 上安装并启动，确认设备出现在列表中
+
+---
+
+## 九、常见问题
+
+### Q: `JWT_SECRET` / 凭据未设置导致启动失败
+```
+FATAL: JWT_SECRET environment variable must be set in production
+```
+**解决**：检查 `apps/relay-server/.env` 是否创建且包含所有必需变量。
+
+### Q: ffmpeg 找不到或缺少 libx264
+```
+Error: spawn ffmpeg ENOENT
+```
+**解决**：`sudo apt install ffmpeg`，确保 `ffmpeg` 在 `$PATH` 中。
+
+### Q: WebSocket 连接失败
+```
+WebSocket connection to 'ws://...' failed
+```
+**排查**：
+1. relay-server 是否运行：`curl http://localhost:9300/health`
+2. nginx 是否代理 WebSocket：检查 `proxy_set_header Upgrade` 配置
+3. Agent Token 是否匹配：检查 client 的 `agentToken` 与 server 的 `AGENT_TOKEN`
+
+### Q: web-console 页面空白 / 404
+**解决**：检查 nginx 配置中的 SPA fallback：`try_files $uri $uri/ /index.html;`
+
+### Q: 端口冲突
+```bash
+# 查看 9300 端口占用
+sudo lsof -i :9300
+# 修改端口：编辑 .env 中的 PORT 变量 + nginx 配置中的 proxy_pass
+```
+
+---
+
+## 十、升级流程
+
+```bash
+cd /opt/electron-agent
+git pull
+
+# 安装可能新增的依赖
+npm install
+
+# 重新构建
+npm run build
+
+# 重启服务
+sudo systemctl restart electron-agent-relay
+
+# 验证
+curl http://localhost:9300/health
+```
+
+> **注意**：升级后需重新构建 web-console（如果前端代码有变更），并将新的 `dist/` 部署到 nginx。
+> Electron Client 的升级需重新构建安装包并分发到各被控机器。
