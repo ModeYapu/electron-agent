@@ -25,6 +25,9 @@ type SendableCommand = {
   [K in ServerDownstreamMessage['type']]: Omit<Extract<ServerDownstreamMessage, { type: K }>, 'deviceId' | 'requestId'> & { requestId?: string };
 }[ServerDownstreamMessage['type']];
 
+// 延迟诊断：截图计数，用于限流日志输出
+let screenshotLatencyCount = 0;
+
 // Declare build-time injected globals from vite.config.ts define
 declare const __API_URL__: string;
 declare const __WS_URL__: string;
@@ -360,6 +363,24 @@ export const useWebSocketStore = defineStore('websocket', () => {
           currentScreenshot.value = message.data.data;
           viewportWidth.value = message.data.width || 0;
           viewportHeight.value = message.data.height || 0;
+
+          // 延迟诊断：每30帧打一次三段延迟
+          const tsData = message.data as any;
+          if (tsData.agentMs && tsData.relayMs) {
+            const receiveMs = Date.now();
+            const agentToRelay = tsData.relayMs - tsData.agentMs;
+            const relayToConsole = receiveMs - tsData.relayMs;
+            const totalLatency = receiveMs - tsData.agentMs;
+            screenshotLatencyCount++;
+            if (screenshotLatencyCount % 30 === 0 || totalLatency > 500) {
+              console.log('[LATENCY]',
+                'agent→relay:', agentToRelay + 'ms',
+                'relay→console:', relayToConsole + 'ms',
+                'total:', totalLatency + 'ms',
+                totalLatency > 500 ? '⚠️ HIGH' : '',
+                tsData.clockOffset !== undefined ? 'offset:' + tsData.clockOffset + 'ms' : '');
+            }
+          }
         }
         break;
 

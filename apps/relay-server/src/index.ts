@@ -67,6 +67,10 @@ const recordingManager = new RecordingManager(
   path.join(__dirname, '..', 'recordings')
 );
 
+// ========== 时钟偏移跟踪 ==========
+// 为每个 agent 记录其时钟与 relay 的偏移量 (agentTime - relayTime)
+const clockOffsets: Map<string, number> = new Map();
+
 // ========== P1 DEVICE STATE SYNC ==========
 // Registry is event-driven: broadcast device changes to every web client so a
 // console that connected before an agent came online sees it appear on its own.
@@ -453,6 +457,12 @@ function handleAgentMessage(message: AgentUpstreamMessage, ws: WebSocket): void 
 
   switch (message.type) {
     case 'agent:register':
+      // 计算时钟偏移 (agentTime - relayTime)，正值表示 agent 时钟更快
+      if (message.agentTime) {
+        const offset = (message as any).agentTime - Date.now();
+        clockOffsets.set(deviceId, offset);
+        console.log(`[TIME-SYNC] ${deviceId?.slice(0,8)} offset=${offset}ms`);
+      }
       deviceRegistry.register(message.info);
       auditStore.log({
         type: 'connect',
@@ -476,11 +486,17 @@ function handleAgentMessage(message: AgentUpstreamMessage, ws: WebSocket): void 
       if (message.data?.data) {
         recordingManager.saveFrame(message.deviceId, message.data.data);
       }
-      // P0 PROTOCOL: Re-wrap agent:* as server:* before broadcasting
+      // 注入 relay 接收时间戳 + 时钟偏移信息
+      const relayMs = Date.now();
+      const tsData: any = { ...(message.data || {}), relayMs };
+      if (clockOffsets.has(deviceId)) {
+        tsData.clockOffset = clockOffsets.get(deviceId);
+      }
+      // Re-wrap agent:* as server:* before broadcasting
       commandBus.broadcastToWeb({
         type: 'server:screenshot',
         deviceId: message.deviceId,
-        data: message.data,
+        data: tsData,
       } as ServerBroadcastMessage);
       break;
 
