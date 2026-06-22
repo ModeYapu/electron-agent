@@ -189,13 +189,13 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const send = (message: SendableCommand): Promise<CommandResult> => {
     return new Promise((resolve, reject) => {
       if (!ws.value || !connected.value) {
-        reject('WebSocket not connected');
+        reject(new Error('WebSocket not connected'));
         addCommandLog(false, 'Command failed: WebSocket not connected');
         return;
       }
 
       if (!currentDevice.value) {
-        reject('No device selected');
+        reject(new Error('No device selected'));
         addCommandLog(false, 'Command failed: No device selected');
         return;
       }
@@ -219,7 +219,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
       setTimeout(() => {
         if (pendingRequests.value.has(requestId)) {
           pendingRequests.value.delete(requestId);
-          reject('Command timeout (10s)');
+          reject(new Error('Command timeout (10s)'));
           addCommandLog(false, `Command ${requestId} failed: Timeout (10s)`);
         }
       }, 10000);
@@ -230,7 +230,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
         if (pendingRequests.value.has(requestId)) {
           pendingRequests.value.delete(requestId);
         }
-        reject('Failed to send command');
+        reject(new Error('Failed to send command'));
         addCommandLog(false, 'Command failed: Failed to send command');
       }
     });
