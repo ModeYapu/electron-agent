@@ -497,11 +497,11 @@ df -h /opt/electron-agent/apps/relay-server/recordings | \
 ```bash
 # relay-server
 curl http://localhost:9300/health
-# 期望: {"status":"ok","uptime":...}
+# 期望: {"status":"ok","timestamp":...}
 
 # 通过 nginx
 curl https://your-domain.com/health
-# 期望: {"status":"ok","uptime":...}
+# 期望: {"status":"ok","timestamp":...}
 ```
 
 ### 8.2 登录测试
