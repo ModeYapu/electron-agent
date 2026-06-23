@@ -30,10 +30,9 @@ export default defineConfig(({ mode }) => {
     sourcemap: true,
   },
   define: {
-    // Prefer VITE_API_URL / VITE_WS_URL env vars, but fall back to the WSL
-    // host IP so the browser (running on Windows) can reach the relay-server
-    // inside WSL.  "localhost" in the browser means Windows, not WSL.
-    __API_URL__: JSON.stringify(env.VITE_API_URL || 'http://10.10.1.167:9300'),
-    __WS_URL__:  JSON.stringify(env.VITE_WS_URL  || 'ws://10.10.1.167:9300/ws'),
+    // Default: empty strings = relative paths (for nginx-proxied production).
+    // Override with VITE_API_URL / VITE_WS_URL for local WSL dev.
+    __API_URL__: JSON.stringify(env.VITE_API_URL ?? ''),
+    __WS_URL__:  JSON.stringify(env.VITE_WS_URL  ?? '/ws'),
   },
 };});

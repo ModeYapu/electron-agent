@@ -458,8 +458,9 @@ function handleAgentMessage(message: AgentUpstreamMessage, ws: WebSocket): void 
   switch (message.type) {
     case 'agent:register':
       // 计算时钟偏移 (agentTime - relayTime)，正值表示 agent 时钟更快
-      if (message.agentTime) {
-        const offset = (message as any).agentTime - Date.now();
+      const agentTime = (message as any).agentTime;
+      if (agentTime) {
+        const offset = agentTime - Date.now();
         clockOffsets.set(deviceId, offset);
         console.log(`[TIME-SYNC] ${deviceId?.slice(0,8)} offset=${offset}ms`);
       }
