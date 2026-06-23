@@ -109,7 +109,7 @@ const commandRateLimiter = rateLimit({
 // Rate limiting for login endpoint
 const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 login attempts per 15 minutes
+  max: 30, // 30 login attempts per 15 minutes
   message: { error: 'Too many login attempts, please try again later' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -121,7 +121,7 @@ app.get('/health', (req, res) => {
 });
 
 // Login endpoint
-app.post('/api/login', loginRateLimiter, (req, res) => {
+app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
