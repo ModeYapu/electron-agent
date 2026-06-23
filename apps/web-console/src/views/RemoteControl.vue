@@ -37,18 +37,6 @@
         @blur="remoteKeyboardActive = false"
         @keydown="handleRemoteKeydown"
       >
-        <div class="viewport-toolbar">
-          <el-tag size="small" effect="dark" type="info">
-            {{ remoteKeyboardActive ? '键盘已接管' : '点击画面后接管键盘' }}
-          </el-tag>
-          <el-tag size="small" effect="dark" :type="streaming ? 'success' : 'warning'">
-            {{ streaming ? '直播中' : '静态截图' }}
-          </el-tag>
-          <el-tag v-if="fieldList.length > 0" size="small" effect="dark" type="primary">
-            已扫描 {{ fieldList.length }} 个字段
-          </el-tag>
-        </div>
-
         <img
           v-if="screenshot"
           :src="'data:image/jpeg;base64,' + screenshot"
