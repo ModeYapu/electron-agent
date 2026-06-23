@@ -259,6 +259,12 @@ export interface ServerShowCursorMessage {
   y: number;
 }
 
+export interface ServerEndRemoteControlMessage {
+  type: 'cmd:endRemoteControl';
+  deviceId: string;
+  requestId: string;
+}
+
 export type ServerDownstreamMessage =
   | ServerStartCaptureMessage
   | ServerStopCaptureMessage
@@ -281,7 +287,8 @@ export type ServerDownstreamMessage =
   | ServerClearStorageMessage
   | ServerFillFormMessage
   | ServerGetFieldsMessage
-  | ServerShowCursorMessage;
+  | ServerShowCursorMessage
+  | ServerEndRemoteControlMessage;
 
 // ========== Server → Web（广播）==========
 

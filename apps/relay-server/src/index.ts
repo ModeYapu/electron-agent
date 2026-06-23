@@ -418,7 +418,7 @@ function handleWebConnection(ws: WebSocket, role: 'admin' | 'viewer'): void {
       // Forward to the corresponding Agent
       const success = commandBus.forwardToAgent(deviceId, message, ws);
 
-      if (message.type === 'cmd:stopCapture') {
+      if (message.type === 'cmd:stopCapture' || message.type === 'cmd:endRemoteControl') {
         recordingManager.stopSession(deviceId).then(result => {
           if (result) {
             commandBus.broadcastToWeb({
