@@ -362,6 +362,14 @@ function handleAgentConnection(ws: WebSocket, deviceId: string): void {
   ws.on('close', () => {
     console.log(`[Agent] Disconnected: ${deviceId}`);
     deviceRegistry.unregister(deviceId);
+    // 断连时编译未完成的录制，避免帧文件成为孤儿
+    recordingManager.stopSession(deviceId).then(result => {
+      if (result) {
+        console.log(`[Recording] Compiled orphaned session on disconnect: ${result.sessionId} (${result.durationMs}ms, ${result.frameCount}frames)`);
+      }
+    }).catch(err => {
+      console.error(`[Recording] Failed to compile on disconnect:`, err);
+    });
   });
 }
 
