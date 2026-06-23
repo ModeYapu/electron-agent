@@ -15,6 +15,7 @@
             >
               {{ streaming ? '⏹ 停止直播' : '▶ 开始直播' }}
             </el-button>
+            <el-button v-if="streaming" @click="endRemoteControl" type="danger" size="small" plain>退出远程操作</el-button>
             <el-button @click="refreshScreenshot" type="primary" size="small">刷新截图</el-button>
             <el-button @click="utilityDrawerVisible = true" size="small">操作面板</el-button>
             <el-button @click="logDrawerVisible = true" size="small">日志</el-button>
@@ -320,6 +321,19 @@ const stopStreaming = () => {
   ElMessage.info('直播已停止');
 };
 
+const endRemoteControl = () => {
+  streaming.value = false;
+  if (streamInterval) { clearInterval(streamInterval); streamInterval = null; }
+
+  wsStore.send({
+    type: 'cmd:endRemoteControl',
+    requestId: generateRequestId(),
+  }).catch(() => {});
+
+  addLog(true, '已退出远程操作');
+  ElMessage.success('远程操作已结束');
+};
+
 // ===== Screenshot =====
 const handleImageClick = async (event: MouseEvent) => {
   focusRemoteViewport();
@@ -335,7 +349,13 @@ const handleImageClick = async (event: MouseEvent) => {
   const x = Math.round(localX * scaleX);
   const y = Math.round(localY * scaleY);
 
-  const info = await inspectElementAt(x, y);
+  // inspectElementAt 走 cmd:eval 不经过坐标缩放，需用原始页面坐标
+  const origW = wsStore.originalWidth || vpW;
+  const origH = wsStore.originalHeight || vpH;
+  const info = await inspectElementAt(
+    Math.round(x * origW / vpW),
+    Math.round(y * origH / vpH)
+  );
   if (info?.tag === 'SELECT' && info.options?.length > 0) {
     openSelectPicker(info, x, y, localX, localY);
     return;
@@ -634,7 +654,14 @@ const handleInspectedElement = async (info: any, x: number, y: number, localX: n
 };
 
 const detectAndHandleElement = async (x: number, y: number, localX: number, localY: number) => {
-  const info = await inspectElementAt(x, y);
+  const origW = wsStore.originalWidth || wsStore.viewportWidth || 1920;
+  const origH = wsStore.originalHeight || wsStore.viewportHeight || 1080;
+  const vpW = wsStore.viewportWidth || origW;
+  const vpH = wsStore.viewportHeight || origH;
+  const info = await inspectElementAt(
+    Math.round(x * origW / vpW),
+    Math.round(y * origH / vpH)
+  );
   if (info) {
     await handleInspectedElement(info, x, y, localX, localY);
   }

@@ -64,6 +64,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const currentScreenshot = ref<string | null>(null);
   const viewportWidth = ref(0);
   const viewportHeight = ref(0);
+  const originalWidth = ref(0);
+  const originalHeight = ref(0);
   const networkLogs = ref<Array<{ deviceId: string; request: any; timestamp: number }>>([]);
   const consoleLogs = ref<Array<{ deviceId: string; log: any; timestamp: number }>>([]);
   const errorLogs = ref<Array<{ deviceId: string; error: any; timestamp: number }>>([]);
@@ -363,6 +365,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
           currentScreenshot.value = message.data.data;
           viewportWidth.value = message.data.width || 0;
           viewportHeight.value = message.data.height || 0;
+          originalWidth.value = (message.data as any).originalWidth || message.data.width || 0;
+          originalHeight.value = (message.data as any).originalHeight || message.data.height || 0;
 
           // 延迟诊断：每30帧打一次三段延迟
           const tsData = message.data as any;
@@ -482,6 +486,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
     currentScreenshot.value = null;
     viewportWidth.value = 0;
     viewportHeight.value = 0;
+    originalWidth.value = 0;
+    originalHeight.value = 0;
     networkLogs.value = [];
     consoleLogs.value = [];
     errorLogs.value = [];
@@ -520,6 +526,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
     currentScreenshot,
     viewportWidth,
     viewportHeight,
+    originalWidth,
+    originalHeight,
     networkLogs,
     consoleLogs,
     errorLogs,
