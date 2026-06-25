@@ -125,6 +125,13 @@ export class CommandBus extends EventEmitter {
       clearTimeout(pending.timeout);
       this.pendingRequests.delete(key);
 
+      // Diagnostic: log cursor/type results
+      if (pending.commandType === 'cmd:showCursor' || pending.commandType === 'cmd:type') {
+        const ok = result?.success;
+        const data = result?.data;
+        console.log(`[CmdResult] ${deviceId?.slice(0,8)}... ${pending.commandType} → ${ok ? '✓' : '✗'} data=${JSON.stringify(data)?.substring(0, 80)}`);
+      }
+
       // Send server:result to the web client
       this.sendToWeb(pending.ws, {
         type: 'server:result',

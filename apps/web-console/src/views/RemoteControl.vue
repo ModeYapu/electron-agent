@@ -45,6 +45,7 @@
           @click="handleImageClick"
           @wheel.prevent="handleScroll"
           @mousemove="handleMouseMove"
+          @mouseleave="handleMouseLeave"
         />
         <el-empty v-else description="无截图数据 — 点击「刷新截图」或「开始直播」" />
 
@@ -344,6 +345,14 @@ const handleImageClick = async (event: MouseEvent) => {
     Math.round(x * origW / vpW),
     Math.round(y * origH / vpH)
   );
+  
+  // 在 client 端显示光标
+  wsStore.send({
+    type: 'cmd:showCursor',
+    requestId: generateRequestId(),
+    x, y,
+  }).catch(() => {});
+  
   if (info?.tag === 'SELECT' && info.options?.length > 0) {
     openSelectPicker(info, x, y, localX, localY);
     return;
@@ -509,6 +518,18 @@ const handleMouseMove = (event: MouseEvent) => {
     requestId: generateRequestId(),
     x,
     y,
+  }).catch(() => {});
+};
+
+const handleMouseLeave = () => {
+  lastCursorX = -1;
+  lastCursorY = -1;
+  cursorThrottleTimer = null;
+  wsStore.send({
+    type: 'cmd:showCursor',
+    requestId: generateRequestId(),
+    x: -1,
+    y: -1,
   }).catch(() => {});
 };
 
@@ -682,27 +703,16 @@ const applySelectValue = async () => {
   }
 };
 
-const applyTextToFocusedElement = async (text: string) => {
+const applyTextToFocusedElement = async (text: string, x?: number, y?: number) => {
   if (!device.value || !text) return;
-  const safeText = JSON.stringify(text);
   const result = await wsStore.send({
-    type: 'cmd:eval',
+    type: 'cmd:type',
     requestId: generateRequestId(),
-    code: `(() => {
-      const el = document.elementFromPoint(${lastClickX}, ${lastClickY})
-        || document.activeElement;
-      if (!el) return JSON.stringify({ok:false, why:'no element found'});
-      const t = el.tagName;
-      if (t !== 'INPUT' && t !== 'TEXTAREA' && t !== 'SELECT')
-        return JSON.stringify({ok:false, why:'not input', tag:t});
-      el.value = ${safeText};
-      el.dispatchEvent(new Event('input', {bubbles:true}));
-      el.dispatchEvent(new Event('change', {bubbles:true}));
-      el.focus();
-      return JSON.stringify({ok:true, tag:t, val:el.value});
-    })()`,
+    text,
+    x,
+    y,
   });
-  return typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
+  return result.data;
 };
 
 const submitInputBubble = async () => {
@@ -712,7 +722,15 @@ const submitInputBubble = async () => {
   }
 
   try {
-    const info = await applyTextToFocusedElement(inputBubble.text);
+    // 显示光标+客服正在协助
+    wsStore.send({
+      type: 'cmd:showCursor',
+      requestId: generateRequestId(),
+      x: lastClickX,
+      y: lastClickY,
+    }).catch(() => {});
+
+    const info = await applyTextToFocusedElement(inputBubble.text, lastClickX, lastClickY);
     addLog(true, `附近填写: "${inputBubble.text}" → ${info?.tag || '?'} ${info?.ok ? '✓' : '✗ ' + info?.why}`);
     if (info?.ok) {
       closeInputBubble();
@@ -762,7 +780,15 @@ const evalCode = async () => {
 const typeText = async () => {
   if (!device.value || !controlForm.value.text) return;
   try {
-    const info = await applyTextToFocusedElement(controlForm.value.text);
+    // 显示光标+客服正在协助
+    wsStore.send({
+      type: 'cmd:showCursor',
+      requestId: generateRequestId(),
+      x: lastClickX,
+      y: lastClickY,
+    }).catch(() => {});
+
+    const info = await applyTextToFocusedElement(controlForm.value.text, lastClickX, lastClickY);
     addLog(true, `输入: "${controlForm.value.text}" → ${info?.tag || '?'} ${info?.ok ? '✓' : '✗ '+info?.why}`);
     controlForm.value.text = '';
     if (info?.ok) setTimeout(() => refreshScreenshot(), 600);

@@ -337,8 +337,21 @@ wss.on('connection', (ws: WebSocket, req) => {
   });
 });
 
+// ── Agent 重连追踪 (diagnostic) ──
+const agentConnectLog = new Map<string, { count: number; lastDisconnect: number }>();
+
 function handleAgentConnection(ws: WebSocket, deviceId: string): void {
-  console.log(`[Agent] Connected: ${deviceId}`);
+  const prev = agentConnectLog.get(deviceId);
+  const now = Date.now();
+  if (prev) {
+    const sinceDisconnect = now - prev.lastDisconnect;
+    const count = prev.count + 1;
+    console.log(`[Agent] Connected: ${deviceId} | reconnect #${count} | ${sinceDisconnect}ms since last disconnect`);
+    agentConnectLog.set(deviceId, { count, lastDisconnect: prev.lastDisconnect });
+  } else {
+    console.log(`[Agent] Connected: ${deviceId} | first connect`);
+    agentConnectLog.set(deviceId, { count: 1, lastDisconnect: 0 });
+  }
 
   // 注册到 CommandBus
   commandBus.registerAgent(deviceId, ws);
@@ -359,8 +372,12 @@ function handleAgentConnection(ws: WebSocket, deviceId: string): void {
     }
   });
 
-  ws.on('close', () => {
-    console.log(`[Agent] Disconnected: ${deviceId}`);
+  ws.on('close', (code: number, reason: Buffer) => {
+    const reasonStr = reason?.toString() || '(no reason)';
+    const prev = agentConnectLog.get(deviceId);
+    const now = Date.now();
+    if (prev) agentConnectLog.set(deviceId, { ...prev, lastDisconnect: now });
+    console.log(`[Agent] Disconnected: ${deviceId} | code=${code} reason="${reasonStr}"`);
     deviceRegistry.unregister(deviceId);
     // 断连时编译未完成的录制，避免帧文件成为孤儿
     recordingManager.stopSession(deviceId).then(result => {
@@ -426,6 +443,14 @@ function handleWebConnection(ws: WebSocket, role: 'admin' | 'viewer'): void {
       // Forward to the corresponding Agent
       const success = commandBus.forwardToAgent(deviceId, message, ws);
 
+      // Diagnostic: log cursor/type commands
+      if (message.type === 'cmd:showCursor' || message.type === 'cmd:type') {
+        const summary = message.type === 'cmd:showCursor'
+          ? `showCursor x=${(message as any).x} y=${(message as any).y}`
+          : `type text="${(message as any).text?.substring(0, 20) || ''}"`;
+        console.log(`[CmdDown] ${deviceId?.slice(0,8)}... ${summary} → agent ${success ? '✓' : '✗ NOT CONNECTED'}`);
+      }
+
       if (message.type === 'cmd:stopCapture' || message.type === 'cmd:endRemoteControl') {
         recordingManager.stopSession(deviceId).then(result => {
           if (result) {
@@ -484,6 +509,10 @@ function handleAgentMessage(message: AgentUpstreamMessage, ws: WebSocket): void 
 
     case 'agent:heartbeat':
       deviceRegistry.updateHeartbeat(deviceId);
+      // Sampled heartbeat log — 1 in every 10
+      if (Math.random() < 0.1) {
+        console.log(`[Heartbeat] ${deviceId?.slice(0,8)}... received`);
+      }
       break;
 
     case 'agent:pageChanged':
