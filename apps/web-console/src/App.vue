@@ -9,6 +9,8 @@
         </el-menu>
       </div>
       <div class="header-right">
+        <!-- 客服通话：坐席上线接听入口 -->
+        <OperatorCallEntry />
         <el-tag v-if="wsStore.connected" type="success">已连接</el-tag>
         <el-tag v-else type="warning">未连接</el-tag>
         <el-button size="small" link @click="handleLogout">退出登录</el-button>
@@ -18,6 +20,10 @@
     <el-main class="app-main">
       <router-view />
     </el-main>
+
+    <!-- 全局通话层：来电弹窗 + 通话面板（路由切换不卸载，保证通话不中断） -->
+    <CallIncoming />
+    <CallPanel />
   </el-container>
 
   <!-- When not authenticated, just render the route (Login view). -->
@@ -28,6 +34,9 @@
 import { computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useWebSocketStore } from '@/stores/websocket';
+import OperatorCallEntry from '@/views/OperatorCallEntry.vue';
+import CallIncoming from '@/views/CallIncoming.vue';
+import CallPanel from '@/views/CallPanel.vue';
 
 const wsStore = useWebSocketStore();
 const route = useRoute();
