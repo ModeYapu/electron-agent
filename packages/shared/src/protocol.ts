@@ -257,6 +257,8 @@ export interface ServerShowCursorMessage {
   x: number;
   /** Viewport y coordinate, or -1 to hide */
   y: number;
+  /** If true, client renders the cursor with an active text-input indicator */
+  showText?: boolean;
 }
 
 export interface ServerEndRemoteControlMessage {

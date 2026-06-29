@@ -36,16 +36,17 @@
         @focus="remoteKeyboardActive = true"
         @blur="remoteKeyboardActive = false"
         @keydown="handleRemoteKeydown"
+        @mousemove="handleMouseMove"
+        @mouseleave="handleMouseLeave"
       >
         <img
           v-if="screenshot"
+          ref="screenshotImageRef"
           :src="'data:image/jpeg;base64,' + screenshot"
           alt="Screenshot"
           class="screenshot-image"
           @click="handleImageClick"
           @wheel.prevent="handleScroll"
-          @mousemove="handleMouseMove"
-          @mouseleave="handleMouseLeave"
         />
         <el-empty v-else description="无截图数据 — 点击「刷新截图」或「开始直播」" />
 
@@ -67,6 +68,7 @@
             v-model="inputBubble.text"
             size="small"
             placeholder="直接输入要填入的值"
+            @focus="onInputBubbleFocus"
             @keyup.enter="submitInputBubble"
           />
           <div class="bubble-actions">
@@ -224,6 +226,7 @@ const controlForm = ref({ url: '', code: '', text: '' });
 const logs = ref<Array<{ success: boolean; message: string; timestamp: number }>>([]);
 const workspaceRef = ref<HTMLElement | null>(null);
 const remoteViewportRef = ref<HTMLElement | null>(null);
+const screenshotImageRef = ref<HTMLImageElement | null>(null);
 const remoteKeyboardActive = ref(false);
 const utilityDrawerVisible = ref(false);
 const logDrawerVisible = ref(false);
@@ -497,12 +500,13 @@ let lastCursorY = 0;
 
 const handleMouseMove = (event: MouseEvent) => {
   if (!device.value) return;
-  const target = event.target as HTMLImageElement;
-  const rect = target.getBoundingClientRect();
+  const img = screenshotImageRef.value;
+  if (!img) return;
+  const rect = img.getBoundingClientRect();
   const localX = event.clientX - rect.left;
   const localY = event.clientY - rect.top;
-  const vpW = wsStore.viewportWidth || target.naturalWidth;
-  const vpH = wsStore.viewportHeight || target.naturalHeight;
+  const vpW = wsStore.viewportWidth || img.naturalWidth;
+  const vpH = wsStore.viewportHeight || img.naturalHeight;
   if (!vpW || !vpH) return;
   const x = Math.round(localX * (vpW / rect.width));
   const y = Math.round(localY * (vpH / rect.height));
@@ -621,6 +625,18 @@ const closeInputBubble = () => {
   inputBubble.label = '';
 };
 
+const onInputBubbleFocus = () => {
+  if (!device.value) return;
+  // 鼠标焦点在输入弹窗时，client展示光标+文字
+  wsStore.send({
+    type: 'cmd:showCursor',
+    requestId: generateRequestId(),
+    x: lastClickX,
+    y: lastClickY,
+    showText: true,
+  }).catch(() => {});
+};
+
 const openInputBubble = (info: any, localX: number, localY: number) => {
   const pos = positionBubble(localX, localY);
   inputBubble.x = pos.x;
@@ -703,14 +719,12 @@ const applySelectValue = async () => {
   }
 };
 
-const applyTextToFocusedElement = async (text: string, x?: number, y?: number) => {
+const applyTextToFocusedElement = async (text: string) => {
   if (!device.value || !text) return;
   const result = await wsStore.send({
     type: 'cmd:type',
     requestId: generateRequestId(),
     text,
-    x,
-    y,
   });
   return result.data;
 };
@@ -730,7 +744,7 @@ const submitInputBubble = async () => {
       y: lastClickY,
     }).catch(() => {});
 
-    const info = await applyTextToFocusedElement(inputBubble.text, lastClickX, lastClickY);
+    const info = await applyTextToFocusedElement(inputBubble.text);
     addLog(true, `附近填写: "${inputBubble.text}" → ${info?.tag || '?'} ${info?.ok ? '✓' : '✗ ' + info?.why}`);
     if (info?.ok) {
       closeInputBubble();
@@ -788,7 +802,7 @@ const typeText = async () => {
       y: lastClickY,
     }).catch(() => {});
 
-    const info = await applyTextToFocusedElement(controlForm.value.text, lastClickX, lastClickY);
+    const info = await applyTextToFocusedElement(controlForm.value.text);
     addLog(true, `输入: "${controlForm.value.text}" → ${info?.tag || '?'} ${info?.ok ? '✓' : '✗ '+info?.why}`);
     controlForm.value.text = '';
     if (info?.ok) setTimeout(() => refreshScreenshot(), 600);
