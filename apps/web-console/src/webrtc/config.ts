@@ -6,12 +6,12 @@
  */
 
 // 信令服务器（App url_xl）
+// 正式服: wss://polaris.yxqiche.com/aio-webrtc（默认）
 // 测试服: wss://polaris.uat.yixincapital.com/aio-webrtc
-// 正式服: wss://polaris.yxqiche.com/aio-webrtc
-// 可通过 VITE_RTC_SIGNAL_URL 环境变量覆盖
+// 通过 VITE_RTC_SIGNAL_URL 环境变量覆盖（UAT 联调时在 .env 设置）
 const ENV = (typeof import.meta !== 'undefined' && (import.meta as any).env) || {}
 const SIGNAL_URL =
-  ENV.VITE_RTC_SIGNAL_URL || 'wss://polaris.uat.yixincapital.com/aio-webrtc'
+  ENV.VITE_RTC_SIGNAL_URL || 'wss://polaris.yxqiche.com/aio-webrtc'
 
 // ICE 服务器（App config.uts webrtcServers）
 const ICE_SERVERS: RTCIceServer[] = [
