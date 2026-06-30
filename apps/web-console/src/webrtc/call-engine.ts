@@ -20,7 +20,7 @@
  */
 
 import { SignalClient } from './signal-client'
-import { RTC_CONFIG, MEDIA_CONSTRAINTS } from './config'
+import { RTC_CONFIG, MEDIA_CONSTRAINTS, USE_CANVAS_FAKE_VIDEO, buildCanvasFakeStream } from './config'
 import { rtcLog } from './log'
 
 /** RTC 引擎状态 */
@@ -94,6 +94,20 @@ export class CallEngine {
       return
     }
     try {
+      // 本地测试环境（localhost/127.0.0.1）：用 canvas 模拟视频流，
+      // 避免和主叫端 winRtc 抢同一个真实摄像头（NotReadableError）。
+      // 生产环境（一体机 vs 坐席 PC 分离）用真实 getUserMedia。
+      if (USE_CANVAS_FAKE_VIDEO) {
+        this.localStream = buildCanvasFakeStream()
+        rtcLog.sys(
+          `本地媒体采集成功(canvas模拟): video=${this.localStream.getVideoTracks().length} audio=${this.localStream.getAudioTracks().length}`,
+        )
+        this.localStream.getTracks().forEach((t) => {
+          rtcLog.sys(`  track: kind=${t.kind} enabled=${t.enabled} label=${t.label}`)
+        })
+        this.cb.onLocalStream?.(this.localStream)
+        return
+      }
       rtcLog.sys('请求摄像头/麦克风权限…')
       this.localStream = await navigator.mediaDevices.getUserMedia(MEDIA_CONSTRAINTS)
       rtcLog.sys(
