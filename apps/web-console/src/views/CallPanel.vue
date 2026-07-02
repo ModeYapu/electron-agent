@@ -1,8 +1,8 @@
 <template>
-  <div class="call-panel-overlay" v-if="show">
+  <div class="call-panel-overlay" ref="overlayRef" v-if="show" :style="panelOverlayStyle">
     <div class="call-panel">
-      <!-- 顶部状态条 -->
-      <div class="panel-header">
+      <!-- 顶部状态条（可拖动手柄） -->
+      <div class="panel-header" @mousedown="startDrag">
         <div class="header-left">
           <el-tag :type="statusTagType" effect="dark" size="small">{{ statusText }}</el-tag>
           <span class="duration" v-if="callStore.isConnected">{{ formatDuration(callStore.durationSec) }}</span>
@@ -17,16 +17,24 @@
 
       <!-- 视频区 -->
       <div class="video-area" v-if="!minimized">
-        <!-- 远端（客户/一体机）大屏 -->
-        <video ref="remoteVideoRef" class="remote-video" autoplay playsinline></video>
+        <!-- 远端（客户/一体机）大屏 ↔ 点击小窗可切换大小 -->
+        <video
+          ref="remoteVideoRef"
+          :class="['remote-video', { 'video-small': swapped }]"
+          autoplay
+          playsinline
+          controlslist="noplaybackrate nodownload nofullscreen noremoteplayback"
+          disablepictureinpicture
+          @click="swapped = !swapped"
+        ></video>
         <div class="remote-empty" v-if="!callStore.remoteStream">
           <el-icon :size="48"><VideoCamera /></el-icon>
           <span>等待对方画面…</span>
         </div>
 
-        <!-- 本地（坐席）小窗 -->
-        <div class="local-video-box">
-          <video ref="localVideoRef" class="local-video" autoplay playsinline muted></video>
+        <!-- 本地（坐席）小窗 ↔ 点击小窗可切换大小 -->
+        <div :class="['local-video-box', { 'video-large': swapped }]" @click="swapped = !swapped">
+          <video ref="localVideoRef" class="local-video" autoplay playsinline muted controlslist="noplaybackrate nodownload nofullscreen noremoteplayback" disablepictureinpicture></video>
           <div class="local-empty" v-if="!callStore.localStream">
             <el-icon><Loading /></el-icon>
           </div>
@@ -85,7 +93,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Microphone,
   Mute,
@@ -101,8 +109,61 @@ import { useCallStore } from '@/stores/call'
 const callStore = useCallStore()
 
 const minimized = ref(false)
+// 视频切换：false=远端大屏/本地小窗，true=本地大屏/远端小窗
+const swapped = ref(false)
 const remoteVideoRef = ref<HTMLVideoElement | null>(null)
 const localVideoRef = ref<HTMLVideoElement | null>(null)
+
+// ====== 面板拖拽（按住 header 拖动）======
+const panelPos = ref<{ left: number | null; top: number | null }>({ left: null, top: null })
+const dragState = ref<{ startX: number; startY: number; origLeft: number; origTop: number } | null>(null)
+const overlayRef = ref<HTMLElement | null>(null)
+
+const startDrag = (e: MouseEvent) => {
+  if (e.button !== 0) return
+  // 排除点击按钮（最小化等）
+  if ((e.target as HTMLElement).closest('button')) return
+  const el = overlayRef.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  // 首次拖拽：从 right 定位切换到 left 定位
+  if (panelPos.value.left === null) {
+    panelPos.value = { left: rect.left, top: rect.top }
+  }
+  dragState.value = {
+    startX: e.clientX,
+    startY: e.clientY,
+    origLeft: panelPos.value.left || rect.left,
+    origTop: panelPos.value.top || rect.top,
+  }
+  e.preventDefault()
+}
+const onDragMove = (e: MouseEvent) => {
+  const ds = dragState.value
+  if (!ds) return
+  panelPos.value = {
+    left: ds.origLeft + (e.clientX - ds.startX),
+    top: ds.origTop + (e.clientY - ds.startY),
+  }
+}
+const endDrag = () => { dragState.value = null }
+
+const panelOverlayStyle = computed(() => {
+  const p = panelPos.value
+  if (p.left !== null && p.top !== null) {
+    return { left: `${p.left}px`, top: `${p.top}px`, right: 'auto' }
+  }
+  return {}
+})
+
+onMounted(() => {
+  window.addEventListener('mousemove', onDragMove)
+  window.addEventListener('mouseup', endDrag)
+})
+onUnmounted(() => {
+  window.removeEventListener('mousemove', onDragMove)
+  window.removeEventListener('mouseup', endDrag)
+})
 
 // 显示条件：正在接听协商中 或 通话中
 const show = computed(
@@ -169,6 +230,46 @@ watch(show, async (v) => {
     void attachStream(localVideoRef.value, callStore.localStream)
   }
 })
+// minimized 变化时重新绑定（最小化用 v-if 销毁 video 元素，展开重建后需重新 attach 流）
+watch(minimized, async (m) => {
+  if (!m) {
+    await nextTick()
+    void attachStream(remoteVideoRef.value, callStore.remoteStream)
+    void attachStream(localVideoRef.value, callStore.localStream)
+  }
+})
+// swapped（切换大小屏）变化时也重新绑定（CSS class 变化 + HMR 可能导致 video srcObject 丢失）
+watch(swapped, async () => {
+  await nextTick()
+  void attachStream(remoteVideoRef.value, callStore.remoteStream)
+  void attachStream(localVideoRef.value, callStore.localStream)
+})
+
+// ★ 流保活：通话中每 3 秒检查 video.srcObject，丢失则重新 attach。
+//   黑屏根因：HMR 热更新重建 video 元素 / 浏览器长时间运行 GC 流 / ICE 重连后流引用变化，
+//   都可能导致 srcObject 为空 → 黑屏。定期检查兜底。
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null
+watch(show, (v) => {
+  if (v) {
+    keepAliveTimer = setInterval(async () => {
+      const rv = remoteVideoRef.value
+      const lv = localVideoRef.value
+      // 远端流存在但 video 没绑定 → 重新 attach
+      if (rv && callStore.remoteStream && rv.srcObject !== callStore.remoteStream) {
+        void attachStream(rv, callStore.remoteStream)
+      }
+      if (lv && callStore.localStream && lv.srcObject !== callStore.localStream) {
+        void attachStream(lv, callStore.localStream)
+      }
+    }, 3000)
+  } else if (keepAliveTimer) {
+    clearInterval(keepAliveTimer)
+    keepAliveTimer = null
+  }
+})
+onUnmounted(() => {
+  if (keepAliveTimer) clearInterval(keepAliveTimer)
+})
 
 // 通话结束自动取消最小化
 watch(
@@ -201,6 +302,12 @@ watch(
   padding: 10px 14px;
   background: #2a2a2a;
   color: #fff;
+  cursor: move;
+  user-select: none;
+}
+.panel-header :deep(button),
+.panel-header button {
+  cursor: pointer;
 }
 .header-left {
   display: flex;
@@ -231,6 +338,18 @@ watch(
   width: 100%;
   height: 100%;
   object-fit: cover;
+  cursor: pointer;
+}
+/* 切换：远端缩小到右上角小窗 */
+.remote-video.video-small {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 110px;
+  height: 80px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  z-index: 2;
 }
 .remote-empty {
   position: absolute;
@@ -253,6 +372,18 @@ watch(
   overflow: hidden;
   background: #0a0a0a;
   border: 1px solid rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+}
+/* 切换：本地放大占满整个视频区 */
+.local-video-box.video-large {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  border: none;
 }
 .local-video {
   width: 100%;

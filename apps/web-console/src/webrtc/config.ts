@@ -93,6 +93,12 @@ export function buildCanvasFakeStream(): MediaStream {
 
   // 静态背景 + 动态时间戳，方便主叫端确认画面在动
   const draw = () => {
+    // ★ 预先镜像绘制：CallPanel 的 .local-video 有 transform:scaleX(-1)（真实摄像头镜像），
+    //   canvas 文字被 CSS 镜像会反转。这里绘制时反向，CSS 镜像后抵消，文字正常显示。
+    ctx.save()
+    ctx.translate(canvas.width, 0)
+    ctx.scale(-1, 1)
+
     // 渐变背景
     const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height)
     grad.addColorStop(0, '#1e3a8a')
@@ -113,6 +119,8 @@ export function buildCanvasFakeStream(): MediaStream {
     ctx.font = '14px sans-serif'
     ctx.fillStyle = '#a7f3d0'
     ctx.fillText('本地测试环境：真实摄像头已让给主叫端', canvas.width / 2, canvas.height / 2 + 50)
+
+    ctx.restore()
   }
   draw()
   const drawTimer = window.setInterval(draw, 1000)
